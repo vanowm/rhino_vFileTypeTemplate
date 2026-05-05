@@ -62,6 +62,12 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   internal void InstallHook() { _keyHook ??= new KeyboardHook(_grid); }
   internal void RemoveHook()  { _keyHook?.Dispose(); _keyHook = null; }
 
+  protected override void Dispose(bool disposing)
+  {
+    if (disposing) RemoveHook();
+    base.Dispose(disposing);
+  }
+
   public VFileTypeTemplateOptionsControl()
   {
     Dock = DockStyle.Fill;
@@ -501,9 +507,6 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
 internal sealed class GridView : DataGridView
 {
-  // Set when Esc is handled to suppress EditOnEnter from immediately re-entering edit mode.
-  private bool _suppressNextEnterEdit;
-
   // Win32 constants for DLGC_WANTALLKEYS at the DataGridView level.
   private const int WM_GETDLGCODE    = 0x0087;
   private const int DLGC_WANTALLKEYS = 0x0004;
@@ -511,8 +514,6 @@ internal sealed class GridView : DataGridView
   protected override void WndProc(ref Message m)
   {
     base.WndProc(ref m);
-    // Tell IsDialogMessage to deliver Tab/Enter/Esc as WM_KEYDOWN to us,
-    // not treat them as dialog-navigation keystrokes.
     if (m.Msg == WM_GETDLGCODE)
     {
       VFileTypeTemplatePlugIn.TryLog($"[GridView] WM_GETDLGCODE base={m.Result} → adding DLGC_WANTALLKEYS");
@@ -522,8 +523,6 @@ internal sealed class GridView : DataGridView
 
   protected override bool ProcessDialogKey(Keys keyData)
   {
-    // These are handled in GridTextBoxEditingControl.WndProc when in edit mode.
-    // This handles the non-editing-mode case (e.g. Enter/Esc when not editing).
     switch (keyData & Keys.KeyCode)
     {
       case Keys.Enter:
@@ -533,35 +532,30 @@ internal sealed class GridView : DataGridView
     return base.ProcessDialogKey(keyData);
   }
 
-  /// <summary>Called by editing control to commit and move to next row.</summary>
-  internal void CommitAndMoveNext()
+  /// <summary>Commits current edit and exits edit mode (stays on same row).</summary>
+  internal void CommitAndExit()
   {
     CommitEdit(DataGridViewDataErrorContexts.Commit);
     EndEdit();
-    if (CurrentCell == null) return;
-    int nextRow = CurrentCell.RowIndex + 1;
-    int targetRow = nextRow < RowCount ? nextRow : CurrentCell.RowIndex;
-    var cell = Rows[targetRow].Cells[0];
-    BeginInvoke((Action)(() => { CurrentCell = cell; BeginEdit(true); }));
   }
 
-  /// <summary>Called by editing control to cancel edit without re-entering edit mode.</summary>
+  /// <summary>Cancels current edit and exits edit mode (stays on same row).</summary>
   internal void CancelAndExit()
   {
-    _suppressNextEnterEdit = true;
     CancelEdit();
     EndEdit();
   }
 
-  protected override void OnCellEnter(DataGridViewCellEventArgs e)
+  /// <summary>Commits edit, then moves to same column in the row above or below.</summary>
+  internal void NavigateRow(bool up)
   {
-    if (_suppressNextEnterEdit)
-    {
-      _suppressNextEnterEdit = false;
-      // Skip base — don't trigger EditOnEnter for this one cell-enter event.
-      return;
-    }
-    base.OnCellEnter(e);
+    if (CurrentCell == null) return;
+    CommitEdit(DataGridViewDataErrorContexts.Commit);
+    EndEdit();
+    int nextRow = CurrentCell.RowIndex + (up ? -1 : 1);
+    if (nextRow < 0 || nextRow >= RowCount) return;
+    var cell = Rows[nextRow].Cells[CurrentCell.ColumnIndex];
+    BeginInvoke((Action)(() => { CurrentCell = cell; BeginEdit(true); }));
   }
 
   /// <summary>Moves CurrentCell one column forward or backward, wrapping to the next/prev row.</summary>
@@ -574,7 +568,6 @@ internal sealed class GridView : DataGridView
     else          { col++; if (col >= ColumnCount) { col = 0; row++; } }
     if (row < 0 || row >= RowCount) return;
     var cell = Rows[row].Cells[col];
-    // BeginInvoke so the current editing control is fully released before we move.
     BeginInvoke((Action)(() => { CurrentCell = cell; BeginEdit(true); }));
   }
 }
@@ -598,6 +591,8 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
   private const int  VK_TAB           = 0x09;
   private const int  VK_RETURN        = 0x0D;
   private const int  VK_ESCAPE        = 0x1B;
+  private const int  VK_UP            = 0x26;
+  private const int  VK_DOWN          = 0x28;
   private const uint EM_SETCUEBANNER  = 0x1501;
 
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -616,33 +611,44 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
     {
       int vk = (int)m.WParam;
       VFileTypeTemplatePlugIn.TryLog($"[EditCtrl] WM_KEYDOWN vk=0x{vk:X2}");
-      if (vk == VK_TAB || vk == VK_RETURN || vk == VK_ESCAPE)
+      if (EditingControlDataGridView is GridView gv)
       {
-        // Handle here before calling base — prevents the native EDIT proc ringing the bell.
-        if (EditingControlDataGridView is GridView gv)
+        bool handled = true;
+        switch (vk)
         {
-          switch (vk)
-          {
-            case VK_TAB:
-              VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Tab → NavigateCell");
-              gv.CommitEdit(DataGridViewDataErrorContexts.Commit);
-              gv.EndEdit();
-              gv.NavigateCell((Control.ModifierKeys & Keys.Shift) != 0);
-              break;
-            case VK_RETURN:
-              VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Enter → CommitAndMoveNext");
-              gv.CommitAndMoveNext();
-              break;
-            case VK_ESCAPE:
-              VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Esc → CancelAndExit");
-              gv.CancelAndExit();
-              break;
-          }
+          case VK_TAB:
+            VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Tab → NavigateCell");
+            gv.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            gv.EndEdit();
+            gv.NavigateCell((Control.ModifierKeys & Keys.Shift) != 0);
+            break;
+          case VK_UP:
+            VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Up → NavigateRow");
+            gv.NavigateRow(up: true);
+            break;
+          case VK_DOWN:
+            VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Down → NavigateRow");
+            gv.NavigateRow(up: false);
+            break;
+          // VK_RETURN and VK_ESCAPE are handled by the WH_GETMESSAGE hook
+          // (nullified before dispatch); these cases are fallback only.
+          case VK_RETURN:
+            VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Enter → CommitAndExit");
+            gv.CommitAndExit();
+            break;
+          case VK_ESCAPE:
+            VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Esc → CancelAndExit");
+            gv.CancelAndExit();
+            break;
+          default:
+            handled = false;
+            break;
         }
-        else
-          VFileTypeTemplatePlugIn.TryLog($"[EditCtrl] vk=0x{vk:X2} but EditingControlDataGridView is not GridView");
-        m.Result = IntPtr.Zero;
-        return; // do NOT call base
+        if (handled)
+        {
+          m.Result = IntPtr.Zero;
+          return; // do NOT call base — prevents bell
+        }
       }
     }
 
@@ -739,7 +745,7 @@ internal sealed class KeyboardHook : IDisposable
             _grid.BeginInvoke((Action)(() =>
             {
               VFileTypeTemplatePlugIn.TryLog($"[Hook] dispatch vk=0x{capturedVk:X2}");
-              if (capturedVk == VK_RETURN) _grid.CommitAndMoveNext();
+              if (capturedVk == VK_RETURN) _grid.CommitAndExit();
               else                         _grid.CancelAndExit();
             }));
         }
