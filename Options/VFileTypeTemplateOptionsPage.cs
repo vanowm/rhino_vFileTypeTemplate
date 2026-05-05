@@ -33,7 +33,14 @@ public sealed class VFileTypeTemplateOptionsPage : OptionsDialogPage
   public override bool OnActivate(bool active)
   {
     if (active)
+    {
       _control?.ReloadConfig();
+      _control?.InstallHook();
+    }
+    else
+    {
+      _control?.RemoveHook();
+    }
     return base.OnActivate(active);
   }
 }
@@ -50,6 +57,10 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   private readonly Button _removeBtn;
   private readonly Button _browseBtn;
   private readonly Button _editBtn;
+  private KeyboardHook? _keyHook;
+
+  internal void InstallHook() { _keyHook ??= new KeyboardHook(_grid); }
+  internal void RemoveHook()  { _keyHook?.Dispose(); _keyHook = null; }
 
   public VFileTypeTemplateOptionsControl()
   {
@@ -169,12 +180,27 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       BeginInvoke((Action)RemoveEmptyRows);
     };
 
-    // Show "<Default>" cue text in the TemplatePath editing control while empty.
+    // Show "<Default>" cue text in the TemplatePath editing control while empty;
+    // show shortened path as the editable text; clear cue banner for other columns.
     _grid.EditingControlShowing += (s, e) =>
     {
-      if (_grid.CurrentCell?.ColumnIndex == _grid.Columns["TemplatePath"].Index &&
-          e.Control is GridTextBoxEditingControl tb)
+      if (e.Control is not GridTextBoxEditingControl tb) return;
+      if (_grid.CurrentCell?.ColumnIndex == _grid.Columns["TemplatePath"].Index)
+      {
         tb.SetCueBanner("<Default>");
+        // Show shortened value so the user edits the bare name, not the full path.
+        var raw = _grid.CurrentCell?.Value?.ToString() ?? string.Empty;
+        var shortened = ShortenTemplatePath(raw);
+        if (tb.Text != shortened)
+        {
+          tb.Text = shortened;
+          tb.SelectAll();
+        }
+      }
+      else
+      {
+        tb.SetCueBanner(string.Empty); // clear any cue banner from a previous cell
+      }
     };
 
     // Double-click on empty grid area → add new row (skip if empty-extension row exists).
@@ -379,9 +405,6 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void OnBrowse(object? sender, EventArgs e)
   {
-    // Commit any active cell edit so we read the up-to-date value and the row is selectable.
-    _grid.EndEdit();
-
     DataGridViewRow? row = null;
     if (_grid.SelectedRows.Count > 0)
       row = _grid.SelectedRows[0];
@@ -390,6 +413,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     else if (_grid.Rows.Count > 0)
       row = _grid.Rows[0];
     if (row == null) return;
+
     using var dlg = new System.Windows.Forms.OpenFileDialog
     {
       Title = "Select template file",
@@ -397,7 +421,8 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       CheckFileExists = true,
     };
 
-    var existing = ResolveFullTemplatePath(row.Cells["TemplatePath"].Value?.ToString() ?? string.Empty);
+    var existingRaw = row.Cells["TemplatePath"].Value?.ToString() ?? string.Empty;
+    var existing = ResolveFullTemplatePath(existingRaw);
     if (!string.IsNullOrEmpty(existing) && File.Exists(existing))
       dlg.InitialDirectory = Path.GetDirectoryName(existing);
     else
@@ -407,8 +432,24 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
         dlg.InitialDirectory = tplDir;
     }
 
-    if (dlg.ShowDialog(FindForm()) == DialogResult.OK)
-      row.Cells["TemplatePath"].Value = ShortenTemplatePath(dlg.FileName);
+    if (dlg.ShowDialog(FindForm()) != DialogResult.OK) return;
+    var shortPath = ShortenTemplatePath(dlg.FileName);
+
+    // If the TemplatePath cell of this row is currently open in the editing control,
+    // update the text there directly so the change is visible without flickering.
+    bool tplCellEditing = _grid.IsCurrentCellInEditMode &&
+                          _grid.CurrentCell?.RowIndex == row.Index &&
+                          _grid.CurrentCell?.ColumnIndex == _grid.Columns["TemplatePath"].Index;
+    if (tplCellEditing && _grid.EditingControl is TextBox editTb)
+    {
+      editTb.Text = shortPath;
+      editTb.SelectAll();
+    }
+    else
+    {
+      _grid.EndEdit();
+      row.Cells["TemplatePath"].Value = shortPath;
+    }
   }
 
   private void OnEditTemplate(object? sender, EventArgs e)
@@ -499,9 +540,9 @@ internal sealed class GridView : DataGridView
     EndEdit();
     if (CurrentCell == null) return;
     int nextRow = CurrentCell.RowIndex + 1;
-    if (nextRow < RowCount)
-      CurrentCell = Rows[nextRow].Cells[0];
-    // else stay on last row, no re-entry into edit
+    int targetRow = nextRow < RowCount ? nextRow : CurrentCell.RowIndex;
+    var cell = Rows[targetRow].Cells[0];
+    BeginInvoke((Action)(() => { CurrentCell = cell; BeginEdit(true); }));
   }
 
   /// <summary>Called by editing control to cancel edit without re-entering edit mode.</summary>
@@ -531,8 +572,10 @@ internal sealed class GridView : DataGridView
     int col = CurrentCell.ColumnIndex;
     if (backward) { col--; if (col < 0) { col = ColumnCount - 1; row--; } }
     else          { col++; if (col >= ColumnCount) { col = 0; row++; } }
-    if (row >= 0 && row < RowCount)
-      CurrentCell = Rows[row].Cells[col];
+    if (row < 0 || row >= RowCount) return;
+    var cell = Rows[row].Cells[col];
+    // BeginInvoke so the current editing control is fully released before we move.
+    BeginInvoke((Action)(() => { CurrentCell = cell; BeginEdit(true); }));
   }
 }
 
@@ -621,4 +664,97 @@ internal sealed class GridTextBoxCell : DataGridViewTextBoxCell
 internal sealed class GridTextBoxColumn : DataGridViewTextBoxColumn
 {
   public GridTextBoxColumn() { CellTemplate = new GridTextBoxCell(); }
+}
+
+// ---------------------------------------------------------------------------
+// Thread-level WH_GETMESSAGE hook.
+// Rhino's Options dialog loop consumes WM_KEYDOWN(VK_RETURN) and (VK_ESCAPE)
+// before IsDialogMessage can deliver them to child windows, so DLGC_WANTALLKEYS
+// alone cannot intercept them.  This hook sees every message as it is dequeued,
+// before the dialog loop touches it.  When Enter or Esc arrives while our grid
+// is in edit mode, the message is changed to WM_NULL (ignored by the dialog
+// loop) and the appropriate grid action is posted via BeginInvoke.
+// ---------------------------------------------------------------------------
+
+internal sealed class KeyboardHook : IDisposable
+{
+  private const int WH_GETMESSAGE = 3;
+  private const int HC_ACTION     = 0;
+  private const int PM_REMOVE     = 1;
+  private const int WM_KEYDOWN    = 0x0100;
+  private const int WM_NULL       = 0x0000;
+  private const int VK_RETURN     = 0x0D;
+  private const int VK_ESCAPE     = 0x1B;
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct MSG
+  {
+    public IntPtr hwnd;
+    public int    message;
+    public IntPtr wParam;
+    public IntPtr lParam;
+    public uint   time;
+    public int    ptX, ptY;
+  }
+
+  private delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  private static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+  [DllImport("user32.dll")]
+  private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+  [DllImport("user32.dll")]
+  private static extern IntPtr CallNextHookEx(IntPtr hhk, int code, IntPtr wParam, IntPtr lParam);
+  [DllImport("kernel32.dll")]
+  private static extern uint GetCurrentThreadId();
+
+  private readonly GridView _grid;
+  private readonly HookProc _proc; // held to prevent GC collection
+  private IntPtr _hook;
+
+  public KeyboardHook(GridView grid)
+  {
+    _grid = grid;
+    _proc = Callback;
+    _hook = SetWindowsHookEx(WH_GETMESSAGE, _proc, IntPtr.Zero, GetCurrentThreadId());
+    VFileTypeTemplatePlugIn.TryLog($"[Hook] installed handle=0x{_hook:X}");
+  }
+
+  private IntPtr Callback(int code, IntPtr wParam, IntPtr lParam)
+  {
+    if (code == HC_ACTION && (int)wParam == PM_REMOVE)
+    {
+      var msg = Marshal.PtrToStructure<MSG>(lParam);
+      if (msg.message == WM_KEYDOWN)
+      {
+        int vk = (int)msg.wParam;
+        VFileTypeTemplatePlugIn.TryLog($"[Hook] WM_KEYDOWN vk=0x{vk:X2} inEdit={_grid.IsCurrentCellInEditMode}");
+        if ((vk == VK_RETURN || vk == VK_ESCAPE) && _grid.IsCurrentCellInEditMode)
+        {
+          // Null the message so the dialog loop ignores it.
+          msg.message = WM_NULL;
+          Marshal.StructureToPtr(msg, lParam, false);
+          int capturedVk = vk;
+          if (_grid.IsHandleCreated)
+            _grid.BeginInvoke((Action)(() =>
+            {
+              VFileTypeTemplatePlugIn.TryLog($"[Hook] dispatch vk=0x{capturedVk:X2}");
+              if (capturedVk == VK_RETURN) _grid.CommitAndMoveNext();
+              else                         _grid.CancelAndExit();
+            }));
+        }
+      }
+    }
+    return CallNextHookEx(_hook, code, wParam, lParam);
+  }
+
+  public void Dispose()
+  {
+    if (_hook != IntPtr.Zero)
+    {
+      UnhookWindowsHookEx(_hook);
+      VFileTypeTemplatePlugIn.TryLog("[Hook] uninstalled");
+      _hook = IntPtr.Zero;
+    }
+  }
 }
