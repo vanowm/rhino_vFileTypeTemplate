@@ -124,6 +124,12 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
           {
             var candidate = Path.Combine(tplDir, configuredPath);
             if (File.Exists(candidate)) return candidate;
+            // Try appending .3dm when no extension was given
+            if (string.IsNullOrEmpty(Path.GetExtension(configuredPath)))
+            {
+              candidate = Path.Combine(tplDir, configuredPath + ".3dm");
+              if (File.Exists(candidate)) return candidate;
+            }
           }
         }
         catch { }

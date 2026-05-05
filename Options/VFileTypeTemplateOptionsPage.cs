@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace VFileTypeTemplate;
@@ -92,8 +93,8 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       GridColor = SystemColors.ControlLight,
       BorderStyle = BorderStyle.FixedSingle,
       EnableHeadersVisualStyles = true,
-      // Enter edit mode as soon as a cell is selected (Tab navigates + immediately editable)
       EditMode = DataGridViewEditMode.EditOnEnter,
+      AllowUserToResizeRows = false,   // prevents SizeNS cursor in edit mode
     };
     _grid.DefaultCellStyle.BackColor = SystemColors.Window;
     _grid.DefaultCellStyle.ForeColor = SystemColors.ControlText;
@@ -114,33 +115,47 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       MinimumWidth = 180,
     });
 
-    // CellFormatting: shorten template path display + highlight rows with missing template files.
+    // CellFormatting: highlight missing templates; show <Default> placeholder; shorten paths.
     _grid.CellFormatting += (s, e) =>
     {
-      if (e.RowIndex < 0) return;
+      if (e.RowIndex < 0 || e.CellStyle == null) return;
       var row = _grid.Rows[e.RowIndex];
 
-      // Check if this row's template path is configured but the file is missing.
       var tplRaw = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
       bool missing = !string.IsNullOrEmpty(tplRaw) && !File.Exists(ResolveFullTemplatePath(tplRaw));
-      if (missing && e.CellStyle != null)
+      if (missing)
       {
         e.CellStyle.BackColor = Color.MistyRose;
         e.CellStyle.SelectionBackColor = Color.LightCoral;
         e.CellStyle.SelectionForeColor = SystemColors.ControlText;
       }
 
-      // Shorten display of the template path column.
-      if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index &&
-          e.Value is string path && !string.IsNullOrEmpty(path))
+      if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index)
       {
-        e.Value = ShortenTemplatePath(path);
+        var val = e.Value?.ToString() ?? string.Empty;
+        if (string.IsNullOrEmpty(val) && !missing)
+        {
+          e.Value = "<Default>";
+          e.CellStyle.ForeColor = SystemColors.GrayText;
+        }
+        else
+          e.Value = ShortenTemplatePath(val);
         e.FormattingApplied = true;
       }
     };
 
-    // Double-click on any non-row area (empty space below rows, or column header area
-    // while Rows.Count == 0) → add a new entry.
+    // Commit edit when focus leaves the grid (e.g. clicking checkbox or a button).
+    _grid.Leave += (s, e) => _grid.EndEdit();
+
+    // Show "<Default>" cue text in the TemplatePath editing control while empty.
+    _grid.EditingControlShowing += (s, e) =>
+    {
+      if (_grid.CurrentCell?.ColumnIndex == _grid.Columns["TemplatePath"].Index &&
+          e.Control is GridTextBoxEditingControl tb)
+        tb.SetCueBanner("<Default>");
+    };
+
+    // Double-click on empty grid area → add new row (skip if empty-extension row exists).
     _grid.MouseDoubleClick += (s, e) =>
     {
       var hit = _grid.HitTest(e.X, e.Y);
@@ -221,12 +236,19 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   /// <summary>Resolves a bare filename back to a full path via the default template dir.</summary>
   private static string ResolveFullTemplatePath(string path)
   {
-    if (string.IsNullOrEmpty(path) || Path.IsPathRooted(path)) return path;
+    if (string.IsNullOrEmpty(path)) return path;
+    if (Path.IsPathRooted(path)) return path;
     var dir = GetTemplateDir();
     if (!string.IsNullOrEmpty(dir))
     {
       var candidate = Path.Combine(dir, path);
       if (File.Exists(candidate)) return candidate;
+      // Try appending .3dm when no extension was given
+      if (string.IsNullOrEmpty(Path.GetExtension(path)))
+      {
+        candidate = Path.Combine(dir, path + ".3dm");
+        if (File.Exists(candidate)) return candidate;
+      }
     }
     return path;
   }
@@ -298,9 +320,17 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void OnAdd(object? sender, EventArgs e)
   {
+    // Navigate to existing empty-extension row instead of adding a duplicate.
+    var existing = _grid.Rows.Cast<DataGridViewRow>()
+      .FirstOrDefault(r => !r.IsNewRow &&
+        string.IsNullOrEmpty(r.Cells["Extension"].Value?.ToString()));
+    if (existing != null)
+    {
+      _grid.CurrentCell = existing.Cells["Extension"];
+      return;
+    }
     var idx = _grid.Rows.Add(string.Empty, string.Empty);
     _grid.CurrentCell = _grid.Rows[idx].Cells["Extension"];
-    // EditOnEnter handles entering edit mode automatically
   }
 
   private void OnRemove(object? sender, EventArgs e)
@@ -382,14 +412,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 }
 
 // ---------------------------------------------------------------------------
-// Custom DataGridView: Enter/Esc are handled here via ProcessDialogKey so they
-// NEVER reach the host form's AcceptButton / CancelButton.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Custom DataGridView that always consumes Enter/Esc so the host
-// native Rhino dialog can never close on those keys.
-// Tab falls through to DataGridView's built-in cell navigation.
+// Custom DataGridView: prevents Enter/Esc from closing the host native dialog.
 // ---------------------------------------------------------------------------
 
 internal sealed class GridView : DataGridView
@@ -412,23 +435,85 @@ internal sealed class GridView : DataGridView
     }
     return base.ProcessDialogKey(keyData);
   }
+
+  /// <summary>Moves CurrentCell one column forward or backward, wrapping to the next/prev row.</summary>
+  internal void NavigateCell(bool backward)
+  {
+    if (CurrentCell == null) return;
+    int row = CurrentCell.RowIndex;
+    int col = CurrentCell.ColumnIndex;
+    if (backward) { col--; if (col < 0) { col = ColumnCount - 1; row--; } }
+    else          { col++; if (col >= ColumnCount) { col = 0; row++; } }
+    if (row >= 0 && row < RowCount)
+      CurrentCell = Rows[row].Cells[col];
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Custom editing control: returns DLGC_WANTALLKEYS from WM_GETDLGCODE.
-// This tells IsDialogMessage (called by the native Rhino dialog loop) to
-// hand ALL keys — including Tab, Enter, Esc — directly to this control
-// instead of processing them as dialog navigation.
+// Custom editing control.
+//
+// WM_GETDLGCODE: returns DLGC_WANTALLKEYS so the native Rhino dialog's
+//   IsDialogMessage loop delivers Tab/Enter/Esc as WM_KEYDOWN instead of
+//   treating them as dialog-navigation keystrokes.
+//
+// WndProc intercepts WM_KEYDOWN for Tab/Enter/Esc BEFORE calling base, so
+//   the native EDIT control never processes them (which would ring the bell).
 // ---------------------------------------------------------------------------
 
 internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingControl
 {
-  private const int WM_GETDLGCODE  = 0x0087;
-  private const int DLGC_WANTALLKEYS = 0x0004;
+  private const int  WM_GETDLGCODE    = 0x0087;
+  private const int  WM_KEYDOWN       = 0x0100;
+  private const int  DLGC_WANTALLKEYS = 0x0004;
+  private const int  VK_TAB           = 0x09;
+  private const int  VK_RETURN        = 0x0D;
+  private const int  VK_ESCAPE        = 0x1B;
+  private const uint EM_SETCUEBANNER  = 0x1501;
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+
+  /// <summary>Sets the grey placeholder text shown when the TextBox is empty.</summary>
+  public void SetCueBanner(string text)
+  {
+    if (IsHandleCreated)
+      SendMessage(Handle, EM_SETCUEBANNER, IntPtr.Zero, text);
+  }
 
   protected override void WndProc(ref Message m)
   {
+    if (m.Msg == WM_KEYDOWN)
+    {
+      int vk = (int)m.WParam;
+      if (vk == VK_TAB || vk == VK_RETURN || vk == VK_ESCAPE)
+      {
+        // Handle here before calling base — prevents the native EDIT proc ringing the bell.
+        if (EditingControlDataGridView is GridView gv)
+        {
+          switch (vk)
+          {
+            case VK_TAB:
+              gv.CommitEdit(DataGridViewDataErrorContexts.Commit);
+              gv.EndEdit();
+              gv.NavigateCell((Control.ModifierKeys & Keys.Shift) != 0);
+              break;
+            case VK_RETURN:
+              gv.CommitEdit(DataGridViewDataErrorContexts.Commit);
+              gv.EndEdit();
+              break;
+            case VK_ESCAPE:
+              gv.CancelEdit();
+              gv.EndEdit();
+              break;
+          }
+        }
+        m.Result = IntPtr.Zero;
+        return; // do NOT call base
+      }
+    }
+
     base.WndProc(ref m);
+
     if (m.Msg == WM_GETDLGCODE)
       m.Result = (IntPtr)(m.Result.ToInt32() | DLGC_WANTALLKEYS);
   }
