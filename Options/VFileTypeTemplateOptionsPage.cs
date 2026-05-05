@@ -218,10 +218,10 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     };
 
     // ---- Buttons ----
-    _addBtn    = MakeButton("Add",      OnAdd);
-    _removeBtn = MakeButton("Remove",   OnRemove);
-    _browseBtn = MakeButton("Browse…",  OnBrowse);
-    _editBtn   = MakeButton("Edit…",    OnEditTemplate);
+    _addBtn    = MakeButton("&Add",              OnAdd);
+    _removeBtn = MakeButton("&Remove",           OnRemove);
+    _browseBtn = MakeButton("&Browse…",          OnBrowse);
+    _editBtn   = MakeButton("&Edit template",    OnEditTemplate);
 
     var buttonPanel = new FlowLayoutPanel
     {
@@ -257,7 +257,15 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private static Button MakeButton(string text, EventHandler handler)
   {
-    var btn = new Button { Text = text, Size = new Size(86, 26), Margin = new Padding(0, 0, 6, 0) };
+    var btn = new Button
+    {
+      Text = text,
+      AutoSize = true,
+      AutoSizeMode = AutoSizeMode.GrowAndShrink,
+      Padding = new Padding(6, 0, 6, 0),
+      MinimumSize = new Size(80, 26),
+      Margin = new Padding(0, 0, 6, 0),
+    };
     btn.Click += handler;
     return btn;
   }
@@ -374,13 +382,14 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void RemoveEmptyRows()
   {
-    // Remove rows where both Extension and TemplatePath are blank, but not the
-    // row currently being edited (to allow the user to type in a new row).
+    // Remove rows where both Extension and TemplatePath are blank,
+    // but only when the user has moved away from that row.
+    var currentRowIndex = _grid.CurrentCell?.RowIndex ?? -1;
     var toRemove = _grid.Rows.Cast<DataGridViewRow>()
       .Where(r => !r.IsNewRow &&
                   string.IsNullOrWhiteSpace(r.Cells["Extension"].Value?.ToString()) &&
                   string.IsNullOrWhiteSpace(r.Cells["TemplatePath"].Value?.ToString()) &&
-                  !(_grid.IsCurrentCellInEditMode && _grid.CurrentCell?.RowIndex == r.Index))
+                  r.Index != currentRowIndex)
       .ToList();
     foreach (var r in toRemove)
       _grid.Rows.Remove(r);
@@ -593,6 +602,22 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
   {
     if (IsHandleCreated)
       SendMessage(Handle, EM_SETCUEBANNER, IntPtr.Zero, text);
+  }
+
+  /// <summary>
+  /// Tell the DataGridView that the editing control handles cursor keys itself,
+  /// so the grid never steals them for row/column navigation while in edit mode.
+  /// </summary>
+  public override bool EditingControlWantsInputKey(Keys keyData, bool dataGridViewWantsInputKey)
+  {
+    switch (keyData & Keys.KeyCode)
+    {
+      case Keys.Left: case Keys.Right: // keep cursor movement — never navigate columns
+      case Keys.Up:   case Keys.Down:  // do nothing in single-line edit; don’t navigate rows
+      case Keys.Home: case Keys.End:
+        return true;
+    }
+    return base.EditingControlWantsInputKey(keyData, dataGridViewWantsInputKey);
   }
 
   protected override void WndProc(ref Message m)
