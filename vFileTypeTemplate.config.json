@@ -1,0 +1,9 @@
+﻿{
+  "enabled": true,
+  "mappings": [
+    {
+      "extension": ".dxf",
+      "templatePath": ""
+    }
+  ]
+}
