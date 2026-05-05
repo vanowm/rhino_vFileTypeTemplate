@@ -109,8 +109,26 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
   /// </summary>
   internal static string ResolveTemplatePath(string configuredPath)
   {
-    if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
-      return configuredPath;
+    if (!string.IsNullOrWhiteSpace(configuredPath))
+    {
+      if (File.Exists(configuredPath))
+        return configuredPath;
+
+      // Bare filename? Try resolving within the Rhino template directory.
+      if (!Path.IsPathRooted(configuredPath))
+      {
+        try
+        {
+          var tplDir = Path.GetDirectoryName(Rhino.ApplicationSettings.FileSettings.TemplateFile);
+          if (!string.IsNullOrEmpty(tplDir))
+          {
+            var candidate = Path.Combine(tplDir, configuredPath);
+            if (File.Exists(candidate)) return candidate;
+          }
+        }
+        catch { }
+      }
+    }
 
     try
     {

@@ -92,6 +92,8 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       GridColor = SystemColors.ControlLight,
       BorderStyle = BorderStyle.FixedSingle,
       EnableHeadersVisualStyles = true,
+      // Enter edit mode as soon as a cell is selected (Tab navigates + immediately editable)
+      EditMode = DataGridViewEditMode.EditOnEnter,
     };
     _grid.DefaultCellStyle.BackColor = SystemColors.Window;
     _grid.DefaultCellStyle.ForeColor = SystemColors.ControlText;
@@ -112,7 +114,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       MinimumWidth = 180,
     });
 
-    // Show only filename when template is in the default Rhino template directory.
+    // Display only filename when template is inside the default Rhino template directory.
     _grid.CellFormatting += (s, e) =>
     {
       if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index &&
@@ -123,32 +125,43 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       }
     };
 
-    // Enter = commit edit; Escape = cancel edit only (not the Options dialog).
+    // --- Enter/Esc handling ---
+    // When the grid has focus but the editing control is not yet showing
+    // (e.g. header row selected), swallow Enter/Esc so they don't close the dialog.
+    _grid.PreviewKeyDown += (s, e) =>
+    {
+      if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape)
+        e.IsInputKey = true;
+    };
     _grid.KeyDown += (s, e) =>
     {
-      if (_grid.IsCurrentCellInEditMode)
+      if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape)
       {
         if (e.KeyCode == Keys.Enter)
-        {
-          _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
           _grid.EndEdit();
-          e.Handled = true;
-          e.SuppressKeyPress = true;
-        }
-        else if (e.KeyCode == Keys.Escape)
-        {
+        else
           _grid.CancelEdit();
-          _grid.EndEdit();
-          e.Handled = true;
-          e.SuppressKeyPress = true;
-        }
+        e.Handled = true;
+        e.SuppressKeyPress = true;
       }
     };
 
-    // Double-click on empty grid → add new entry.
-    _grid.DoubleClick += (s, e) =>
+    // When the embedded TextBox editing control is shown, attach our handler to it
+    // so Enter/Esc in the TextBox commit/cancel the edit WITHOUT closing the dialog.
+    _grid.EditingControlShowing += (s, e) =>
     {
-      if (_grid.Rows.Count == 0)
+      e.Control.PreviewKeyDown -= OnEditControlPreviewKeyDown;
+      e.Control.PreviewKeyDown += OnEditControlPreviewKeyDown;
+      e.Control.KeyDown -= OnEditingControlKeyDown;
+      e.Control.KeyDown += OnEditingControlKeyDown;
+    };
+
+    // Double-click on any non-row area (empty space below rows, or column header area
+    // while Rows.Count == 0) → add a new entry.
+    _grid.MouseDoubleClick += (s, e) =>
+    {
+      var hit = _grid.HitTest(e.X, e.Y);
+      if (hit.RowIndex < 0 && hit.Type != DataGridViewHitTestType.ColumnHeader)
         OnAdd(null, EventArgs.Empty);
     };
 
@@ -188,6 +201,38 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     ReloadConfig();
   }
 
+  // ---- Key handlers for the embedded editing control ----
+
+  private void OnEditControlPreviewKeyDown(object? sender, PreviewKeyDownEventArgs e)
+  {
+    // Mark Enter and Esc as regular input keys so they don't bubble up
+    // as dialog keys (which would trigger the OK / Cancel buttons).
+    if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape)
+      e.IsInputKey = true;
+  }
+
+  private void OnEditingControlKeyDown(object? sender, KeyEventArgs e)
+  {
+    switch (e.KeyCode)
+    {
+      case Keys.Enter:
+        _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        _grid.EndEdit();
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+        break;
+
+      case Keys.Escape:
+        _grid.CancelEdit();
+        _grid.EndEdit();
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+        break;
+    }
+  }
+
+  // ---- Button helper ----
+
   private static Button MakeButton(string text, EventHandler handler)
   {
     var btn = new Button { Text = text, Size = new Size(86, 26), Margin = new Padding(0, 0, 6, 0) };
@@ -197,7 +242,6 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   // ---- Template path helpers ----
 
-  /// <summary>Returns the directory of Rhino's current default template file.</summary>
   private static string GetTemplateDir()
   {
     try
@@ -210,10 +254,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     return string.Empty;
   }
 
-  /// <summary>
-  /// Returns just the filename when the path is inside the default template directory;
-  /// otherwise returns the full path unchanged.
-  /// </summary>
+  /// <summary>Shows just the filename when the path is inside the default template dir.</summary>
   private static string ShortenTemplatePath(string fullPath)
   {
     if (string.IsNullOrEmpty(fullPath)) return fullPath;
@@ -224,10 +265,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     return fullPath;
   }
 
-  /// <summary>
-  /// Resolves a bare filename back to a full path using the default template directory.
-  /// Returns the input unchanged if it is already rooted.
-  /// </summary>
+  /// <summary>Resolves a bare filename back to a full path via the default template dir.</summary>
   private static string ResolveFullTemplatePath(string path)
   {
     if (string.IsNullOrEmpty(path) || Path.IsPathRooted(path)) return path;
@@ -270,14 +308,17 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     _grid.EndEdit();
 
     // Build ext → template map; if the same extension appears in multiple rows,
-    // the last (lowest) row wins.
+    // the last row wins.
     var extToTemplate = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     foreach (DataGridViewRow row in _grid.Rows)
     {
       if (row.IsNewRow) continue;
       var rawExt = row.Cells["Extension"].Value?.ToString()?.Trim() ?? string.Empty;
-      var path   = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
       if (string.IsNullOrEmpty(rawExt)) continue;
+
+      // Resolve bare filename to full path so File.Exists works at runtime.
+      var path = ResolveFullTemplatePath(
+        row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty);
 
       foreach (var ext in VFileTypeTemplateConfig.SplitExtensions(rawExt))
         extToTemplate[ext] = path;
@@ -306,7 +347,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   {
     var idx = _grid.Rows.Add(string.Empty, string.Empty);
     _grid.CurrentCell = _grid.Rows[idx].Cells["Extension"];
-    _grid.BeginEdit(true);
+    // EditOnEnter handles entering edit mode automatically
   }
 
   private void OnRemove(object? sender, EventArgs e)
@@ -350,20 +391,34 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
     var row = _grid.SelectedRows[0];
     var raw = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
-    if (string.IsNullOrEmpty(raw)) return;
 
-    var fullPath = ResolveFullTemplatePath(raw);
-    if (!File.Exists(fullPath))
+    // Resolve configured path → if empty, fall back to Rhino default.
+    var fullPath = string.IsNullOrEmpty(raw)
+      ? VFileTypeTemplatePlugIn.ResolveTemplatePath(raw)
+      : ResolveFullTemplatePath(raw);
+
+    if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath))
     {
-      MessageBox.Show($"Template file not found:\n{fullPath}",
-        "File Type Template", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+      var msg = string.IsNullOrEmpty(raw)
+        ? "No template configured for this entry and no Rhino default template found."
+        : $"Template file not found:\n{fullPath}";
+      MessageBox.Show(msg, "File Type Template", MessageBoxButtons.OK, MessageBoxIcon.Warning);
       return;
     }
 
-    // Open the .3dm in a new Rhino instance via the shell association.
+    // Open the .3dm in a new Rhino instance (find Rhino.exe from the running process).
     try
     {
-      Process.Start(new ProcessStartInfo { FileName = fullPath, UseShellExecute = true });
+      var rhinoExe = Process.GetCurrentProcess().MainModule?.FileName;
+      if (!string.IsNullOrEmpty(rhinoExe) && File.Exists(rhinoExe))
+        Process.Start(new ProcessStartInfo
+        {
+          FileName = rhinoExe,
+          Arguments = $"\"{fullPath}\"",
+          UseShellExecute = false,
+        });
+      else
+        Process.Start(new ProcessStartInfo { FileName = fullPath, UseShellExecute = true });
     }
     catch (Exception ex)
     {
@@ -372,4 +427,3 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     }
   }
 }
-
