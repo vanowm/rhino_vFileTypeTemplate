@@ -128,8 +128,13 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
         }
         catch { }
       }
+
+      // Configured path specified but file not found — skip entirely; do not fall back.
+      TryLog($"ResolveTemplatePath: configured template not found '{configuredPath}'; skipping.");
+      return string.Empty;
     }
 
+    // Empty/blank configured path → use Rhino default template.
     try
     {
       var rhinoDefault = Rhino.ApplicationSettings.FileSettings.TemplateFile;

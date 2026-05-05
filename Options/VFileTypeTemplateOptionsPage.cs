@@ -114,9 +114,23 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       MinimumWidth = 180,
     });
 
-    // Display only filename when template is inside the default Rhino template directory.
+    // CellFormatting: shorten template path display + highlight rows with missing template files.
     _grid.CellFormatting += (s, e) =>
     {
+      if (e.RowIndex < 0) return;
+      var row = _grid.Rows[e.RowIndex];
+
+      // Check if this row's template path is configured but the file is missing.
+      var tplRaw = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
+      bool missing = !string.IsNullOrEmpty(tplRaw) && !File.Exists(ResolveFullTemplatePath(tplRaw));
+      if (missing)
+      {
+        e.CellStyle.BackColor = Color.MistyRose;
+        e.CellStyle.SelectionBackColor = Color.LightCoral;
+        e.CellStyle.SelectionForeColor = SystemColors.ControlText;
+      }
+
+      // Shorten display of the template path column.
       if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index &&
           e.Value is string path && !string.IsNullOrEmpty(path))
       {
