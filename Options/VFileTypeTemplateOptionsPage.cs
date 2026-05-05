@@ -110,6 +110,18 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       MinimumWidth = 180,
     });
 
+    // Intercept Enter so it commits the cell edit instead of closing the dialog
+    _grid.KeyDown += (s, e) =>
+    {
+      if (e.KeyCode == Keys.Enter && _grid.IsCurrentCellInEditMode)
+      {
+        _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        _grid.EndEdit();
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+      }
+    };
+
     // ---- Buttons ----
     _addBtn    = MakeButton("Add",      OnAdd);
     _removeBtn = MakeButton("Remove",   OnRemove);
@@ -165,6 +177,9 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   public void SaveConfig()
   {
+    // Commit any cell that is still being edited
+    _grid.EndEdit();
+
     var config = new VFileTypeTemplateConfig { Enabled = _enabledCheck.Checked };
 
     foreach (DataGridViewRow row in _grid.Rows)
