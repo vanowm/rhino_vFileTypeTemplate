@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using Rhino.PlugIns;
 
 [assembly: AssemblyTitle("vFileTypeTemplate")]
-[assembly: AssemblyDescription("Automatically applies a Rhino template (.3dm) when a mapped file type is opened. Supports multiple file-extension → template mappings. Configure via Tools > Options > vFileTypeTemplate or the vFileTypeTemplateConfig command.")]
+[assembly: AssemblyDescription("Automatically applies a Rhino template (.3dm) when a mapped file type is opened. Supports multiple file-extension → template mappings, including multiple extensions per entry (e.g. .dxf, .dwg). Configure via Tools > Options > File Type Template or the vFileTypeTemplateConfig command.")]
 [assembly: AssemblyProduct("vFileTypeTemplate")]
 [assembly: ComVisible(false)]
 [assembly: Guid("b7e4d21a-3c8f-4b9e-92d1-5f8a6c0e3d47")]

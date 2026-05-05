@@ -81,6 +81,7 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
     }
 
     TryLog($"Applying template '{templatePath}' to '{fileName}'");
+    RhinoApp.WriteLine($"vFileTypeTemplate: detected {Path.GetFileName(fileName)} — queuing template '{Path.GetFileName(templatePath)}'");
 
     // Defer apply to Rhino's next idle tick so the open-document command has
     // fully completed. This lets BeginUndoRecord work correctly and makes
@@ -202,6 +203,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
 
     doc.Views.Redraw();
     TryLog($"Template applied successfully from: {templatePath}");
+    RhinoApp.WriteLine($"vFileTypeTemplate: template '{Path.GetFileName(templatePath)}' applied to {Path.GetFileName(sourceFilePath)}.");
   }
 
   // -----------------------------------------------------------------------
