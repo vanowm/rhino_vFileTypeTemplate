@@ -1,5 +1,7 @@
 using Rhino.UI;
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -46,6 +48,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   private readonly Button _addBtn;
   private readonly Button _removeBtn;
   private readonly Button _browseBtn;
+  private readonly Button _editBtn;
 
   public VFileTypeTemplateOptionsControl()
   {
@@ -85,7 +88,6 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       SelectionMode = DataGridViewSelectionMode.FullRowSelect,
       MultiSelect = false,
       AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-      // Fix background color
       BackgroundColor = SystemColors.Window,
       GridColor = SystemColors.ControlLight,
       BorderStyle = BorderStyle.FixedSingle,
@@ -110,22 +112,51 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       MinimumWidth = 180,
     });
 
-    // Intercept Enter so it commits the cell edit instead of closing the dialog
+    // Show only filename when template is in the default Rhino template directory.
+    _grid.CellFormatting += (s, e) =>
+    {
+      if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index &&
+          e.Value is string path && !string.IsNullOrEmpty(path))
+      {
+        e.Value = ShortenTemplatePath(path);
+        e.FormattingApplied = true;
+      }
+    };
+
+    // Enter = commit edit; Escape = cancel edit only (not the Options dialog).
     _grid.KeyDown += (s, e) =>
     {
-      if (e.KeyCode == Keys.Enter && _grid.IsCurrentCellInEditMode)
+      if (_grid.IsCurrentCellInEditMode)
       {
-        _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
-        _grid.EndEdit();
-        e.Handled = true;
-        e.SuppressKeyPress = true;
+        if (e.KeyCode == Keys.Enter)
+        {
+          _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+          _grid.EndEdit();
+          e.Handled = true;
+          e.SuppressKeyPress = true;
+        }
+        else if (e.KeyCode == Keys.Escape)
+        {
+          _grid.CancelEdit();
+          _grid.EndEdit();
+          e.Handled = true;
+          e.SuppressKeyPress = true;
+        }
       }
+    };
+
+    // Double-click on empty grid → add new entry.
+    _grid.DoubleClick += (s, e) =>
+    {
+      if (_grid.Rows.Count == 0)
+        OnAdd(null, EventArgs.Empty);
     };
 
     // ---- Buttons ----
     _addBtn    = MakeButton("Add",      OnAdd);
     _removeBtn = MakeButton("Remove",   OnRemove);
     _browseBtn = MakeButton("Browse…",  OnBrowse);
+    _editBtn   = MakeButton("Edit…",    OnEditTemplate);
 
     var buttonPanel = new FlowLayoutPanel
     {
@@ -134,7 +165,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       FlowDirection = FlowDirection.LeftToRight,
       Margin = new Padding(0, 0, 0, 4),
     };
-    buttonPanel.Controls.AddRange(new Control[] { _addBtn, _removeBtn, _browseBtn });
+    buttonPanel.Controls.AddRange(new Control[] { _addBtn, _removeBtn, _browseBtn, _editBtn });
 
     // ---- Info label ----
     var infoLabel = new Label
@@ -164,6 +195,51 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     return btn;
   }
 
+  // ---- Template path helpers ----
+
+  /// <summary>Returns the directory of Rhino's current default template file.</summary>
+  private static string GetTemplateDir()
+  {
+    try
+    {
+      var tf = Rhino.ApplicationSettings.FileSettings.TemplateFile;
+      if (!string.IsNullOrEmpty(tf))
+        return Path.GetDirectoryName(tf) ?? string.Empty;
+    }
+    catch { }
+    return string.Empty;
+  }
+
+  /// <summary>
+  /// Returns just the filename when the path is inside the default template directory;
+  /// otherwise returns the full path unchanged.
+  /// </summary>
+  private static string ShortenTemplatePath(string fullPath)
+  {
+    if (string.IsNullOrEmpty(fullPath)) return fullPath;
+    var dir = GetTemplateDir();
+    if (!string.IsNullOrEmpty(dir) &&
+        string.Equals(Path.GetDirectoryName(fullPath), dir, StringComparison.OrdinalIgnoreCase))
+      return Path.GetFileName(fullPath);
+    return fullPath;
+  }
+
+  /// <summary>
+  /// Resolves a bare filename back to a full path using the default template directory.
+  /// Returns the input unchanged if it is already rooted.
+  /// </summary>
+  private static string ResolveFullTemplatePath(string path)
+  {
+    if (string.IsNullOrEmpty(path) || Path.IsPathRooted(path)) return path;
+    var dir = GetTemplateDir();
+    if (!string.IsNullOrEmpty(dir))
+    {
+      var candidate = Path.Combine(dir, path);
+      if (File.Exists(candidate)) return candidate;
+    }
+    return path;
+  }
+
   // ---- Load / Save ----
 
   public void ReloadConfig()
@@ -171,38 +247,52 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     var config = VFileTypeTemplateConfig.Load();
     _enabledCheck.Checked = config.Enabled;
     _grid.Rows.Clear();
-    foreach (var m in config.Mappings)
-      _grid.Rows.Add(m.Extension, m.TemplatePath);
+
+    // Group mappings that share the same template onto a single row.
+    var groups = config.Mappings
+      .GroupBy(m => m.TemplatePath ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+      .Select(g => new
+      {
+        Extensions = string.Join(", ",
+          g.SelectMany(m => VFileTypeTemplateConfig.SplitExtensions(m.Extension))
+           .Distinct(StringComparer.OrdinalIgnoreCase)
+           .OrderBy(x => x)),
+        Template = g.Key,
+      });
+
+    foreach (var group in groups)
+      _grid.Rows.Add(group.Extensions, group.Template);
   }
 
   public void SaveConfig()
   {
-    // Commit any cell that is still being edited
+    // Commit any cell still being edited.
     _grid.EndEdit();
 
-    var config = new VFileTypeTemplateConfig { Enabled = _enabledCheck.Checked };
-
+    // Build ext → template map; if the same extension appears in multiple rows,
+    // the last (lowest) row wins.
+    var extToTemplate = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     foreach (DataGridViewRow row in _grid.Rows)
     {
       if (row.IsNewRow) continue;
-      var rawExt  = row.Cells["Extension"].Value?.ToString()?.Trim() ?? string.Empty;
-      var path    = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
+      var rawExt = row.Cells["Extension"].Value?.ToString()?.Trim() ?? string.Empty;
+      var path   = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
       if (string.IsNullOrEmpty(rawExt)) continue;
 
-      // Normalise: split, add leading dot, lowercase, deduplicate, rejoin with ", "
-      var parts = rawExt
-        .Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries)
-        .Select(p => p.Trim().ToLowerInvariant())
-        .Where(p => !string.IsNullOrEmpty(p))
-        .Select(p => p.StartsWith(".") ? p : "." + p)
-        .Distinct()
-        .ToList();
-      if (parts.Count == 0) continue;
+      foreach (var ext in VFileTypeTemplateConfig.SplitExtensions(rawExt))
+        extToTemplate[ext] = path;
+    }
 
+    // Re-group by template → one FileTypeMapping per template.
+    var config = new VFileTypeTemplateConfig { Enabled = _enabledCheck.Checked };
+    foreach (var group in extToTemplate
+               .GroupBy(kv => kv.Value, StringComparer.OrdinalIgnoreCase)
+               .OrderBy(g => g.Key))
+    {
       config.Mappings.Add(new FileTypeMapping
       {
-        Extension    = string.Join(", ", parts),
-        TemplatePath = path,
+        Extension    = string.Join(", ", group.Select(kv => kv.Key).OrderBy(e => e)),
+        TemplatePath = group.Key,
       });
     }
 
@@ -214,7 +304,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void OnAdd(object? sender, EventArgs e)
   {
-    var idx = _grid.Rows.Add(".ext", string.Empty);
+    var idx = _grid.Rows.Add(string.Empty, string.Empty);
     _grid.CurrentCell = _grid.Rows[idx].Cells["Extension"];
     _grid.BeginEdit(true);
   }
@@ -240,12 +330,46 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       CheckFileExists = true,
     };
 
-    var existing = row.Cells["TemplatePath"].Value?.ToString() ?? string.Empty;
+    var existing = ResolveFullTemplatePath(row.Cells["TemplatePath"].Value?.ToString() ?? string.Empty);
     if (!string.IsNullOrEmpty(existing) && File.Exists(existing))
       dlg.InitialDirectory = Path.GetDirectoryName(existing);
+    else
+    {
+      var tplDir = GetTemplateDir();
+      if (!string.IsNullOrEmpty(tplDir))
+        dlg.InitialDirectory = tplDir;
+    }
 
-    if (dlg.ShowDialog(this.FindForm()) == DialogResult.OK)
+    if (dlg.ShowDialog(FindForm()) == DialogResult.OK)
       row.Cells["TemplatePath"].Value = dlg.FileName;
+  }
+
+  private void OnEditTemplate(object? sender, EventArgs e)
+  {
+    if (_grid.SelectedRows.Count == 0) return;
+
+    var row = _grid.SelectedRows[0];
+    var raw = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
+    if (string.IsNullOrEmpty(raw)) return;
+
+    var fullPath = ResolveFullTemplatePath(raw);
+    if (!File.Exists(fullPath))
+    {
+      MessageBox.Show($"Template file not found:\n{fullPath}",
+        "File Type Template", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+      return;
+    }
+
+    // Open the .3dm in a new Rhino instance via the shell association.
+    try
+    {
+      Process.Start(new ProcessStartInfo { FileName = fullPath, UseShellExecute = true });
+    }
+    catch (Exception ex)
+    {
+      MessageBox.Show($"Could not open template:\n{ex.Message}",
+        "File Type Template", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
   }
 }
 
