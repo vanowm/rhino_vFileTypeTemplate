@@ -44,7 +44,7 @@ public sealed class VFileTypeTemplateOptionsPage : OptionsDialogPage
 internal sealed class VFileTypeTemplateOptionsControl : Panel
 {
   private readonly CheckBox _enabledCheck;
-  private readonly DataGridView _grid;
+  private readonly GridView _grid;
   private readonly Button _addBtn;
   private readonly Button _removeBtn;
   private readonly Button _browseBtn;
@@ -78,7 +78,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     };
 
     // ---- Grid ----
-    _grid = new DataGridView
+    _grid = new GridView
     {
       Dock = DockStyle.Fill,
       Margin = new Padding(0, 0, 0, 4),
@@ -139,29 +139,9 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       }
     };
 
-    // --- Enter/Esc handling ---
-    // When the grid has focus but the editing control is not yet showing
-    // (e.g. header row selected), swallow Enter/Esc so they don't close the dialog.
-    _grid.PreviewKeyDown += (s, e) =>
-    {
-      if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape)
-        e.IsInputKey = true;
-    };
-    _grid.KeyDown += (s, e) =>
-    {
-      if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape)
-      {
-        if (e.KeyCode == Keys.Enter)
-          _grid.EndEdit();
-        else
-          _grid.CancelEdit();
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-      }
-    };
-
-    // When the embedded TextBox editing control is shown, attach our handler to it
-    // so Enter/Esc in the TextBox commit/cancel the edit WITHOUT closing the dialog.
+    // When the embedded TextBox editing control is shown, attach key handlers.
+    // Enter/Esc/Tab are marked as IsInputKey so the form never sees them as dialog keys;
+    // the actual commit/cancel/navigate is handled in OnEditingControlKeyDown.
     _grid.EditingControlShowing += (s, e) =>
     {
       e.Control.PreviewKeyDown -= OnEditControlPreviewKeyDown;
@@ -219,9 +199,9 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void OnEditControlPreviewKeyDown(object? sender, PreviewKeyDownEventArgs e)
   {
-    // Mark Enter and Esc as regular input keys so they don't bubble up
-    // as dialog keys (which would trigger the OK / Cancel buttons).
-    if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape)
+    // Tell WinForms these are regular input keys, not dialog/navigation keys.
+    // This prevents the form's AcceptButton/CancelButton from firing.
+    if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape || e.KeyCode == Keys.Tab)
       e.IsInputKey = true;
   }
 
@@ -239,6 +219,22 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       case Keys.Escape:
         _grid.CancelEdit();
         _grid.EndEdit();
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+        break;
+
+      case Keys.Tab:
+        _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        _grid.EndEdit();
+        // Move to the next cell; EditOnEnter will start editing it automatically.
+        if (_grid.CurrentCell != null)
+        {
+          int row = _grid.CurrentCell.RowIndex;
+          int col = _grid.CurrentCell.ColumnIndex + 1;
+          if (col >= _grid.ColumnCount) { col = 0; row++; }
+          if (row < _grid.RowCount)
+            _grid.CurrentCell = _grid.Rows[row].Cells[col];
+        }
         e.Handled = true;
         e.SuppressKeyPress = true;
         break;
@@ -439,5 +435,34 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       MessageBox.Show($"Could not open template:\n{ex.Message}",
         "File Type Template", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Custom DataGridView: Enter/Esc are handled here via ProcessDialogKey so they
+// NEVER reach the host form's AcceptButton / CancelButton.
+// ---------------------------------------------------------------------------
+
+internal sealed class GridView : DataGridView
+{
+  protected override bool ProcessDialogKey(Keys keyData)
+  {
+    var key = keyData & Keys.KeyCode;
+    if (IsCurrentCellInEditMode)
+    {
+      if (key == Keys.Enter)
+      {
+        CommitEdit(DataGridViewDataErrorContexts.Commit);
+        EndEdit();
+        return true;   // consumed — dialog stays open
+      }
+      if (key == Keys.Escape)
+      {
+        CancelEdit();
+        EndEdit();
+        return true;   // consumed — dialog stays open
+      }
+    }
+    return base.ProcessDialogKey(keyData);
   }
 }
