@@ -123,7 +123,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       // Check if this row's template path is configured but the file is missing.
       var tplRaw = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
       bool missing = !string.IsNullOrEmpty(tplRaw) && !File.Exists(ResolveFullTemplatePath(tplRaw));
-      if (missing)
+      if (missing && e.CellStyle != null)
       {
         e.CellStyle.BackColor = Color.MistyRose;
         e.CellStyle.SelectionBackColor = Color.LightCoral;
