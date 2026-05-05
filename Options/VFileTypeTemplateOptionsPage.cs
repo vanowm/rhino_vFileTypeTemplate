@@ -2,25 +2,22 @@ using Rhino.UI;
 using System;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace VFileTypeTemplate;
 
 // ---------------------------------------------------------------------------
-// Rhino Options page — shown under Tools > Options > vFileTypeTemplate
+// Rhino Options page — shown under Tools > Options > File Type Template
 // ---------------------------------------------------------------------------
 
-/// <summary>
-/// Rhino Options page for configuring vFileTypeTemplate extension-to-template mappings.
-/// Registered automatically via <see cref="VFileTypeTemplatePlugIn.OptionsPages"/>.
-/// </summary>
 public sealed class VFileTypeTemplateOptionsPage : OptionsDialogPage
 {
   private VFileTypeTemplateOptionsControl? _control;
 
-  public VFileTypeTemplateOptionsPage() : base("vFileTypeTemplate") { }
+  public VFileTypeTemplateOptionsPage() : base("File Type Template") { }
 
-  public override string LocalPageTitle => "vFileTypeTemplate";
+  public override string LocalPageTitle => "File Type Template";
 
   public override object PageControl => _control ??= new VFileTypeTemplateOptionsControl();
 
@@ -52,89 +49,107 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   public VFileTypeTemplateOptionsControl()
   {
-    Padding = new Padding(8);
-    AutoScroll = true;
+    Dock = DockStyle.Fill;
+
+    // ---- Layout ----
+    var layout = new TableLayoutPanel
+    {
+      Dock = DockStyle.Fill,
+      ColumnCount = 1,
+      RowCount = 4,
+      Padding = new Padding(8),
+    };
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // 0: checkbox
+    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // 1: grid
+    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // 2: buttons
+    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // 3: info label
 
     // ---- Enabled checkbox ----
     _enabledCheck = new CheckBox
     {
       Text = "Enabled (automatically apply template when a mapped file type is opened)",
       AutoSize = true,
-      Location = new Point(8, 8),
+      Dock = DockStyle.Fill,
+      Margin = new Padding(0, 0, 0, 6),
     };
 
     // ---- Grid ----
     _grid = new DataGridView
     {
-      Location = new Point(8, 36),
-      Size = new Size(620, 240),
+      Dock = DockStyle.Fill,
+      Margin = new Padding(0, 0, 0, 4),
       AllowUserToAddRows = false,
       AllowUserToDeleteRows = false,
       RowHeadersVisible = false,
       SelectionMode = DataGridViewSelectionMode.FullRowSelect,
       MultiSelect = false,
       AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-      Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+      // Fix background color
+      BackgroundColor = SystemColors.Window,
+      GridColor = SystemColors.ControlLight,
+      BorderStyle = BorderStyle.FixedSingle,
+      EnableHeadersVisualStyles = true,
     };
+    _grid.DefaultCellStyle.BackColor = SystemColors.Window;
+    _grid.DefaultCellStyle.ForeColor = SystemColors.ControlText;
+    _grid.AlternatingRowsDefaultCellStyle.BackColor = SystemColors.Window;
 
-    var extCol = new DataGridViewTextBoxColumn
+    _grid.Columns.Add(new DataGridViewTextBoxColumn
     {
-      HeaderText = "File Extension",
+      HeaderText = "Extensions (e.g. .dxf, .dwg)",
       Name = "Extension",
-      FillWeight = 20,
-      MinimumWidth = 80,
-    };
-    var tplCol = new DataGridViewTextBoxColumn
+      FillWeight = 28,
+      MinimumWidth = 100,
+    });
+    _grid.Columns.Add(new DataGridViewTextBoxColumn
     {
-      HeaderText = "Template File (.3dm)  — leave blank to use Rhino default",
+      HeaderText = "Template File (.3dm) — blank = Rhino default",
       Name = "TemplatePath",
-      FillWeight = 80,
-      MinimumWidth = 200,
-    };
-    _grid.Columns.Add(extCol);
-    _grid.Columns.Add(tplCol);
+      FillWeight = 72,
+      MinimumWidth = 180,
+    });
 
     // ---- Buttons ----
-    _addBtn = new Button
-    {
-      Text = "Add",
-      Size = new Size(80, 26),
-      Location = new Point(8, 284),
-    };
-    _addBtn.Click += OnAdd;
+    _addBtn    = MakeButton("Add",      OnAdd);
+    _removeBtn = MakeButton("Remove",   OnRemove);
+    _browseBtn = MakeButton("Browse…",  OnBrowse);
 
-    _removeBtn = new Button
+    var buttonPanel = new FlowLayoutPanel
     {
-      Text = "Remove",
-      Size = new Size(80, 26),
-      Location = new Point(96, 284),
+      AutoSize = true,
+      Dock = DockStyle.Fill,
+      FlowDirection = FlowDirection.LeftToRight,
+      Margin = new Padding(0, 0, 0, 4),
     };
-    _removeBtn.Click += OnRemove;
-
-    _browseBtn = new Button
-    {
-      Text = "Browse...",
-      Size = new Size(88, 26),
-      Location = new Point(184, 284),
-    };
-    _browseBtn.Click += OnBrowse;
+    buttonPanel.Controls.AddRange(new Control[] { _addBtn, _removeBtn, _browseBtn });
 
     // ---- Info label ----
     var infoLabel = new Label
     {
-      Text = "Add one entry per file type. Extension must start with a dot (e.g. .dxf).\n" +
+      Text = "Separate multiple extensions with commas (e.g. .dxf, .dwg). " +
+             "The leading dot is optional.\n" +
              "Leave template path empty to apply Rhino's current default template.",
       AutoSize = true,
-      Location = new Point(8, 320),
+      Dock = DockStyle.Fill,
       ForeColor = SystemColors.GrayText,
     };
 
-    Controls.AddRange(new Control[]
-    {
-      _enabledCheck, _grid, _addBtn, _removeBtn, _browseBtn, infoLabel
-    });
+    // ---- Assemble ----
+    layout.Controls.Add(_enabledCheck, 0, 0);
+    layout.Controls.Add(_grid,         0, 1);
+    layout.Controls.Add(buttonPanel,   0, 2);
+    layout.Controls.Add(infoLabel,     0, 3);
 
+    Controls.Add(layout);
     ReloadConfig();
+  }
+
+  private static Button MakeButton(string text, EventHandler handler)
+  {
+    var btn = new Button { Text = text, Size = new Size(86, 26), Margin = new Padding(0, 0, 6, 0) };
+    btn.Click += handler;
+    return btn;
   }
 
   // ---- Load / Save ----
@@ -150,24 +165,30 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   public void SaveConfig()
   {
-    var config = new VFileTypeTemplateConfig
-    {
-      Enabled = _enabledCheck.Checked,
-    };
+    var config = new VFileTypeTemplateConfig { Enabled = _enabledCheck.Checked };
 
     foreach (DataGridViewRow row in _grid.Rows)
     {
       if (row.IsNewRow) continue;
-      var ext = row.Cells["Extension"].Value?.ToString()?.Trim() ?? string.Empty;
-      var path = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
+      var rawExt  = row.Cells["Extension"].Value?.ToString()?.Trim() ?? string.Empty;
+      var path    = row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty;
+      if (string.IsNullOrEmpty(rawExt)) continue;
 
-      if (string.IsNullOrEmpty(ext)) continue;
+      // Normalise: split, add leading dot, lowercase, deduplicate, rejoin with ", "
+      var parts = rawExt
+        .Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries)
+        .Select(p => p.Trim().ToLowerInvariant())
+        .Where(p => !string.IsNullOrEmpty(p))
+        .Select(p => p.StartsWith(".") ? p : "." + p)
+        .Distinct()
+        .ToList();
+      if (parts.Count == 0) continue;
 
-      // Normalise extension
-      if (!ext.StartsWith(".", StringComparison.Ordinal))
-        ext = "." + ext;
-
-      config.Mappings.Add(new FileTypeMapping { Extension = ext.ToLowerInvariant(), TemplatePath = path });
+      config.Mappings.Add(new FileTypeMapping
+      {
+        Extension    = string.Join(", ", parts),
+        TemplatePath = path,
+      });
     }
 
     config.Save();
@@ -178,15 +199,14 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void OnAdd(object? sender, EventArgs e)
   {
-    var rowIdx = _grid.Rows.Add(".ext", string.Empty);
-    _grid.CurrentCell = _grid.Rows[rowIdx].Cells["Extension"];
+    var idx = _grid.Rows.Add(".ext", string.Empty);
+    _grid.CurrentCell = _grid.Rows[idx].Cells["Extension"];
     _grid.BeginEdit(true);
   }
 
   private void OnRemove(object? sender, EventArgs e)
   {
-    if (_grid.SelectedRows.Count == 0) return;
-    foreach (DataGridViewRow row in _grid.SelectedRows)
+    foreach (DataGridViewRow row in _grid.SelectedRows.Cast<DataGridViewRow>().ToList())
       if (!row.IsNewRow)
         _grid.Rows.Remove(row);
   }
@@ -195,10 +215,9 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   {
     if (_grid.SelectedRows.Count == 0 && _grid.Rows.Count > 0)
       _grid.Rows[0].Selected = true;
-
     if (_grid.SelectedRows.Count == 0) return;
-    var row = _grid.SelectedRows[0];
 
+    var row = _grid.SelectedRows[0];
     using var dlg = new System.Windows.Forms.OpenFileDialog
     {
       Title = "Select template file",
@@ -206,11 +225,12 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       CheckFileExists = true,
     };
 
-    var existingPath = row.Cells["TemplatePath"].Value?.ToString() ?? string.Empty;
-    if (!string.IsNullOrEmpty(existingPath) && File.Exists(existingPath))
-      dlg.InitialDirectory = Path.GetDirectoryName(existingPath);
+    var existing = row.Cells["TemplatePath"].Value?.ToString() ?? string.Empty;
+    if (!string.IsNullOrEmpty(existing) && File.Exists(existing))
+      dlg.InitialDirectory = Path.GetDirectoryName(existing);
 
     if (dlg.ShowDialog(this.FindForm()) == DialogResult.OK)
       row.Cells["TemplatePath"].Value = dlg.FileName;
   }
 }
+

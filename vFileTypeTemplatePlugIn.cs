@@ -68,7 +68,8 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
       return;
 
     var mapping = config.Mappings.FirstOrDefault(m =>
-      string.Equals(m.Extension, ext, StringComparison.OrdinalIgnoreCase));
+      VFileTypeTemplateConfig.SplitExtensions(m.Extension)
+        .Any(e => string.Equals(e, ext, StringComparison.OrdinalIgnoreCase)));
     if (mapping == null)
       return;
 
@@ -1238,7 +1239,24 @@ public sealed class VFileTypeTemplateConfig
   public string? FindTemplatePath(string extension)
   {
     var mapping = Mappings.FirstOrDefault(m =>
-      string.Equals(m.Extension, extension, StringComparison.OrdinalIgnoreCase));
+      SplitExtensions(m.Extension)
+        .Any(e => string.Equals(e, extension, StringComparison.OrdinalIgnoreCase)));
     return mapping?.TemplatePath;
+  }
+
+  /// <summary>
+  /// Splits a raw extension string on , ; | — normalises each token
+  /// (lowercase, adds leading dot if missing). Yields nothing for blank input.
+  /// </summary>
+  public static System.Collections.Generic.IEnumerable<string> SplitExtensions(string raw)
+  {
+    if (string.IsNullOrWhiteSpace(raw)) yield break;
+    foreach (var part in raw.Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries))
+    {
+      var ext = part.Trim().ToLowerInvariant();
+      if (string.IsNullOrEmpty(ext)) continue;
+      if (!ext.StartsWith(".")) ext = "." + ext;
+      yield return ext;
+    }
   }
 }
