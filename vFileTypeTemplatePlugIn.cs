@@ -25,6 +25,11 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
 
   public static VFileTypeTemplatePlugIn Instance { get; private set; } = null!;
 
+  protected override void OptionsDialogPages(System.Collections.Generic.List<Rhino.UI.OptionsDialogPage> pages)
+  {
+    pages.Add(new VFileTypeTemplateOptionsPage());
+  }
+
   protected override LoadReturnCode OnLoad(ref string errorMessage)
   {
     RhinoDoc.EndOpenDocument += OnEndOpenDocument;
