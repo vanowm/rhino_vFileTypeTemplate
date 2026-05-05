@@ -115,7 +115,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       MinimumWidth = 180,
     });
 
-    // CellFormatting: highlight missing templates; show <Default> placeholder; shorten paths.
+    // CellFormatting: highlight missing templates; show <Default>/<ext> placeholder; shorten paths.
     _grid.CellFormatting += (s, e) =>
     {
       if (e.RowIndex < 0 || e.CellStyle == null) return;
@@ -130,23 +130,40 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
         e.CellStyle.SelectionForeColor = SystemColors.ControlText;
       }
 
-      if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index)
+      bool isCellEditing = _grid.IsCurrentCellInEditMode &&
+                           _grid.CurrentCell?.RowIndex == e.RowIndex &&
+                           _grid.CurrentCell?.ColumnIndex == e.ColumnIndex;
+
+      if (e.ColumnIndex == _grid.Columns["Extension"].Index)
       {
-        // Only show <Default> placeholder when NOT in edit mode for this cell.
         var val = e.Value?.ToString() ?? string.Empty;
-        bool isCellEditing = _grid.IsCurrentCellInEditMode &&
-                             _grid.CurrentCell?.RowIndex == e.RowIndex &&
-                             _grid.CurrentCell?.ColumnIndex == e.ColumnIndex;
-        if (string.IsNullOrEmpty(val) && !missing && !isCellEditing)
+        if (string.IsNullOrEmpty(val) && !isCellEditing)
         {
-          e.Value = "<Default>";
+          e.Value = ".ext";
           e.CellStyle.ForeColor = SystemColors.GrayText;
+          e.FormattingApplied = true;
         }
-        else if (!isCellEditing)
-          e.Value = ShortenTemplatePath(val);
-        e.FormattingApplied = true;
+      }
+      else if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index)
+      {
+        // Only show <Default> / shorten when NOT in edit mode for this cell.
+        var val = e.Value?.ToString() ?? string.Empty;
+        if (!isCellEditing)
+        {
+          if (string.IsNullOrEmpty(val) && !missing)
+          {
+            e.Value = "<Default>";
+            e.CellStyle.ForeColor = SystemColors.GrayText;
+          }
+          else
+            e.Value = ShortenTemplatePath(val);
+          e.FormattingApplied = true;
+        }
       }
     };
+
+    // Suppress the DataError dialog — errors during formatting are benign.
+    _grid.DataError += (s, e) => { e.ThrowException = false; };
 
     // Commit edit when focus leaves the grid (e.g. clicking checkbox or a button).
     // Also remove any rows where Extension is blank.
@@ -360,6 +377,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     }
     var idx = _grid.Rows.Add(string.Empty, string.Empty);
     _grid.CurrentCell = _grid.Rows[idx].Cells["Extension"];
+    _grid.BeginEdit(true);
   }
 
   private void OnRemove(object? sender, EventArgs e)
@@ -394,7 +412,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     }
 
     if (dlg.ShowDialog(FindForm()) == DialogResult.OK)
-      row.Cells["TemplatePath"].Value = dlg.FileName;
+      row.Cells["TemplatePath"].Value = ShortenTemplatePath(dlg.FileName);
   }
 
   private void OnEditTemplate(object? sender, EventArgs e)
@@ -448,6 +466,19 @@ internal sealed class GridView : DataGridView
 {
   // Set when Esc is handled to suppress EditOnEnter from immediately re-entering edit mode.
   private bool _suppressNextEnterEdit;
+
+  // Win32 constants for DLGC_WANTALLKEYS at the DataGridView level.
+  private const int WM_GETDLGCODE    = 0x0087;
+  private const int DLGC_WANTALLKEYS = 0x0004;
+
+  protected override void WndProc(ref Message m)
+  {
+    base.WndProc(ref m);
+    // Tell IsDialogMessage to deliver Tab/Enter/Esc as WM_KEYDOWN to us,
+    // not treat them as dialog-navigation keystrokes.
+    if (m.Msg == WM_GETDLGCODE)
+      m.Result = (IntPtr)(m.Result.ToInt32() | DLGC_WANTALLKEYS);
+  }
 
   protected override bool ProcessDialogKey(Keys keyData)
   {
