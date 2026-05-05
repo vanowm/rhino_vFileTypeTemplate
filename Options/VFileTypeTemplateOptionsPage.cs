@@ -99,14 +99,14 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     _grid.DefaultCellStyle.ForeColor = SystemColors.ControlText;
     _grid.AlternatingRowsDefaultCellStyle.BackColor = SystemColors.Window;
 
-    _grid.Columns.Add(new DataGridViewTextBoxColumn
+    _grid.Columns.Add(new GridTextBoxColumn
     {
       HeaderText = "Extensions (e.g. .dxf, .dwg)",
       Name = "Extension",
       FillWeight = 28,
       MinimumWidth = 100,
     });
-    _grid.Columns.Add(new DataGridViewTextBoxColumn
+    _grid.Columns.Add(new GridTextBoxColumn
     {
       HeaderText = "Template File (.3dm) — blank = Rhino default",
       Name = "TemplatePath",
@@ -137,17 +137,6 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
         e.Value = ShortenTemplatePath(path);
         e.FormattingApplied = true;
       }
-    };
-
-    // When the embedded TextBox editing control is shown, attach key handlers.
-    // Enter/Esc/Tab are marked as IsInputKey so the form never sees them as dialog keys;
-    // the actual commit/cancel/navigate is handled in OnEditingControlKeyDown.
-    _grid.EditingControlShowing += (s, e) =>
-    {
-      e.Control.PreviewKeyDown -= OnEditControlPreviewKeyDown;
-      e.Control.PreviewKeyDown += OnEditControlPreviewKeyDown;
-      e.Control.KeyDown -= OnEditingControlKeyDown;
-      e.Control.KeyDown += OnEditingControlKeyDown;
     };
 
     // Double-click on any non-row area (empty space below rows, or column header area
@@ -193,52 +182,6 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
     Controls.Add(layout);
     ReloadConfig();
-  }
-
-  // ---- Key handlers for the embedded editing control ----
-
-  private void OnEditControlPreviewKeyDown(object? sender, PreviewKeyDownEventArgs e)
-  {
-    // Tell WinForms these are regular input keys, not dialog/navigation keys.
-    // This prevents the form's AcceptButton/CancelButton from firing.
-    if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape || e.KeyCode == Keys.Tab)
-      e.IsInputKey = true;
-  }
-
-  private void OnEditingControlKeyDown(object? sender, KeyEventArgs e)
-  {
-    switch (e.KeyCode)
-    {
-      case Keys.Enter:
-        _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
-        _grid.EndEdit();
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-        break;
-
-      case Keys.Escape:
-        _grid.CancelEdit();
-        _grid.EndEdit();
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-        break;
-
-      case Keys.Tab:
-        _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
-        _grid.EndEdit();
-        // Move to the next cell; EditOnEnter will start editing it automatically.
-        if (_grid.CurrentCell != null)
-        {
-          int row = _grid.CurrentCell.RowIndex;
-          int col = _grid.CurrentCell.ColumnIndex + 1;
-          if (col >= _grid.ColumnCount) { col = 0; row++; }
-          if (row < _grid.RowCount)
-            _grid.CurrentCell = _grid.Rows[row].Cells[col];
-        }
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-        break;
-    }
   }
 
   // ---- Button helper ----
@@ -443,26 +386,60 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 // NEVER reach the host form's AcceptButton / CancelButton.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Custom DataGridView that always consumes Enter/Esc so the host
+// native Rhino dialog can never close on those keys.
+// Tab falls through to DataGridView's built-in cell navigation.
+// ---------------------------------------------------------------------------
+
 internal sealed class GridView : DataGridView
 {
   protected override bool ProcessDialogKey(Keys keyData)
   {
-    var key = keyData & Keys.KeyCode;
-    if (IsCurrentCellInEditMode)
+    switch (keyData & Keys.KeyCode)
     {
-      if (key == Keys.Enter)
-      {
-        CommitEdit(DataGridViewDataErrorContexts.Commit);
+      case Keys.Enter:
+        if (IsCurrentCellInEditMode)
+          CommitEdit(DataGridViewDataErrorContexts.Commit);
         EndEdit();
         return true;   // consumed — dialog stays open
-      }
-      if (key == Keys.Escape)
-      {
-        CancelEdit();
+
+      case Keys.Escape:
+        if (IsCurrentCellInEditMode)
+          CancelEdit();
         EndEdit();
         return true;   // consumed — dialog stays open
-      }
     }
     return base.ProcessDialogKey(keyData);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Custom editing control: returns DLGC_WANTALLKEYS from WM_GETDLGCODE.
+// This tells IsDialogMessage (called by the native Rhino dialog loop) to
+// hand ALL keys — including Tab, Enter, Esc — directly to this control
+// instead of processing them as dialog navigation.
+// ---------------------------------------------------------------------------
+
+internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingControl
+{
+  private const int WM_GETDLGCODE  = 0x0087;
+  private const int DLGC_WANTALLKEYS = 0x0004;
+
+  protected override void WndProc(ref Message m)
+  {
+    base.WndProc(ref m);
+    if (m.Msg == WM_GETDLGCODE)
+      m.Result = (IntPtr)(m.Result.ToInt32() | DLGC_WANTALLKEYS);
+  }
+}
+
+internal sealed class GridTextBoxCell : DataGridViewTextBoxCell
+{
+  public override Type EditType => typeof(GridTextBoxEditingControl);
+}
+
+internal sealed class GridTextBoxColumn : DataGridViewTextBoxColumn
+{
+  public GridTextBoxColumn() { CellTemplate = new GridTextBoxCell(); }
 }
