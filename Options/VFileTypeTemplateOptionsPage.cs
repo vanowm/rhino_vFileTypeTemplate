@@ -132,20 +132,35 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
       if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index)
       {
+        // Only show <Default> placeholder when NOT in edit mode for this cell.
         var val = e.Value?.ToString() ?? string.Empty;
-        if (string.IsNullOrEmpty(val) && !missing)
+        bool isCellEditing = _grid.IsCurrentCellInEditMode &&
+                             _grid.CurrentCell?.RowIndex == e.RowIndex &&
+                             _grid.CurrentCell?.ColumnIndex == e.ColumnIndex;
+        if (string.IsNullOrEmpty(val) && !missing && !isCellEditing)
         {
           e.Value = "<Default>";
           e.CellStyle.ForeColor = SystemColors.GrayText;
         }
-        else
+        else if (!isCellEditing)
           e.Value = ShortenTemplatePath(val);
         e.FormattingApplied = true;
       }
     };
 
     // Commit edit when focus leaves the grid (e.g. clicking checkbox or a button).
-    _grid.Leave += (s, e) => _grid.EndEdit();
+    // Also remove any rows where Extension is blank.
+    _grid.Leave += (s, e) =>
+    {
+      _grid.EndEdit();
+      RemoveEmptyRows();
+    };
+
+    // Remove empty-extension rows when a cell edit ends.
+    _grid.CellEndEdit += (s, e) =>
+    {
+      BeginInvoke((Action)RemoveEmptyRows);
+    };
 
     // Show "<Default>" cue text in the TemplatePath editing control while empty.
     _grid.EditingControlShowing += (s, e) =>
@@ -318,6 +333,20 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   // ---- Button handlers ----
 
+  private void RemoveEmptyRows()
+  {
+    // Remove rows where both Extension and TemplatePath are blank, but not the
+    // row currently being edited (to allow the user to type in a new row).
+    var toRemove = _grid.Rows.Cast<DataGridViewRow>()
+      .Where(r => !r.IsNewRow &&
+                  string.IsNullOrWhiteSpace(r.Cells["Extension"].Value?.ToString()) &&
+                  string.IsNullOrWhiteSpace(r.Cells["TemplatePath"].Value?.ToString()) &&
+                  !(_grid.IsCurrentCellInEditMode && _grid.CurrentCell?.RowIndex == r.Index))
+      .ToList();
+    foreach (var r in toRemove)
+      _grid.Rows.Remove(r);
+  }
+
   private void OnAdd(object? sender, EventArgs e)
   {
     // Navigate to existing empty-extension row instead of adding a duplicate.
@@ -417,23 +446,51 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
 internal sealed class GridView : DataGridView
 {
+  // Set when Esc is handled to suppress EditOnEnter from immediately re-entering edit mode.
+  private bool _suppressNextEnterEdit;
+
   protected override bool ProcessDialogKey(Keys keyData)
   {
+    // These are handled in GridTextBoxEditingControl.WndProc when in edit mode.
+    // This handles the non-editing-mode case (e.g. Enter/Esc when not editing).
     switch (keyData & Keys.KeyCode)
     {
       case Keys.Enter:
-        if (IsCurrentCellInEditMode)
-          CommitEdit(DataGridViewDataErrorContexts.Commit);
-        EndEdit();
-        return true;   // consumed — dialog stays open
-
       case Keys.Escape:
-        if (IsCurrentCellInEditMode)
-          CancelEdit();
-        EndEdit();
         return true;   // consumed — dialog stays open
     }
     return base.ProcessDialogKey(keyData);
+  }
+
+  /// <summary>Called by editing control to commit and move to next row.</summary>
+  internal void CommitAndMoveNext()
+  {
+    CommitEdit(DataGridViewDataErrorContexts.Commit);
+    EndEdit();
+    if (CurrentCell == null) return;
+    int nextRow = CurrentCell.RowIndex + 1;
+    if (nextRow < RowCount)
+      CurrentCell = Rows[nextRow].Cells[0];
+    // else stay on last row, no re-entry into edit
+  }
+
+  /// <summary>Called by editing control to cancel edit without re-entering edit mode.</summary>
+  internal void CancelAndExit()
+  {
+    _suppressNextEnterEdit = true;
+    CancelEdit();
+    EndEdit();
+  }
+
+  protected override void OnCellEnter(DataGridViewCellEventArgs e)
+  {
+    if (_suppressNextEnterEdit)
+    {
+      _suppressNextEnterEdit = false;
+      // Skip base — don't trigger EditOnEnter for this one cell-enter event.
+      return;
+    }
+    base.OnCellEnter(e);
   }
 
   /// <summary>Moves CurrentCell one column forward or backward, wrapping to the next/prev row.</summary>
@@ -498,12 +555,10 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
               gv.NavigateCell((Control.ModifierKeys & Keys.Shift) != 0);
               break;
             case VK_RETURN:
-              gv.CommitEdit(DataGridViewDataErrorContexts.Commit);
-              gv.EndEdit();
+              gv.CommitAndMoveNext();
               break;
             case VK_ESCAPE:
-              gv.CancelEdit();
-              gv.EndEdit();
+              gv.CancelAndExit();
               break;
           }
         }
