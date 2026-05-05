@@ -180,10 +180,23 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       RemoveEmptyRows();
     };
 
+    // Mark row as "was edited" so RemoveEmptyRows will clean it up if still blank.
+    _grid.CellBeginEdit += (s, e) =>
+    {
+      _grid.Rows[e.RowIndex].Tag = true;
+    };
+
     // Remove empty-extension rows when a cell edit ends.
     _grid.CellEndEdit += (s, e) =>
     {
       BeginInvoke((Action)RemoveEmptyRows);
+    };
+
+    // Single click on a data cell → immediately enter edit mode.
+    _grid.CellClick += (s, e) =>
+    {
+      if (e.RowIndex >= 0 && e.ColumnIndex >= 0)
+        _grid.BeginEdit(true);
     };
 
     // Show "<Default>" cue text in the TemplatePath editing control while empty;
@@ -382,11 +395,13 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void RemoveEmptyRows()
   {
-    // Remove rows where both Extension and TemplatePath are blank,
-    // but only when the user has moved away from that row.
+    // Only remove rows where: both cells are blank AND at least one cell was
+    // entered into edit mode (Tag set by CellBeginEdit) AND the user has moved
+    // away from the row.
     var currentRowIndex = _grid.CurrentCell?.RowIndex ?? -1;
     var toRemove = _grid.Rows.Cast<DataGridViewRow>()
       .Where(r => !r.IsNewRow &&
+                  r.Tag != null &&
                   string.IsNullOrWhiteSpace(r.Cells["Extension"].Value?.ToString()) &&
                   string.IsNullOrWhiteSpace(r.Cells["TemplatePath"].Value?.ToString()) &&
                   r.Index != currentRowIndex)
@@ -538,6 +553,9 @@ internal sealed class GridView : DataGridView
     switch (keyData & Keys.KeyCode)
     {
       case Keys.Enter:
+        if (!IsCurrentCellInEditMode && CurrentCell != null)
+          BeginEdit(true);
+        return true;   // consumed — dialog stays open
       case Keys.Escape:
         return true;   // consumed — dialog stays open
     }
