@@ -134,17 +134,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
                            _grid.CurrentCell?.RowIndex == e.RowIndex &&
                            _grid.CurrentCell?.ColumnIndex == e.ColumnIndex;
 
-      if (e.ColumnIndex == _grid.Columns["Extension"].Index)
-      {
-        var val = e.Value?.ToString() ?? string.Empty;
-        if (string.IsNullOrEmpty(val) && !isCellEditing)
-        {
-          e.Value = ".ext";
-          e.CellStyle.ForeColor = SystemColors.GrayText;
-          e.FormattingApplied = true;
-        }
-      }
-      else if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index)
+      if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index)
       {
         // Only show <Default> / shorten when NOT in edit mode for this cell.
         var val = e.Value?.ToString() ?? string.Empty;
@@ -261,7 +251,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     var dir = GetTemplateDir();
     if (!string.IsNullOrEmpty(dir) &&
         string.Equals(Path.GetDirectoryName(fullPath), dir, StringComparison.OrdinalIgnoreCase))
-      return Path.GetFileName(fullPath);
+      return Path.GetFileNameWithoutExtension(fullPath);
     return fullPath;
   }
 
@@ -389,11 +379,17 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void OnBrowse(object? sender, EventArgs e)
   {
-    if (_grid.SelectedRows.Count == 0 && _grid.Rows.Count > 0)
-      _grid.Rows[0].Selected = true;
-    if (_grid.SelectedRows.Count == 0) return;
+    // Commit any active cell edit so we read the up-to-date value and the row is selectable.
+    _grid.EndEdit();
 
-    var row = _grid.SelectedRows[0];
+    DataGridViewRow? row = null;
+    if (_grid.SelectedRows.Count > 0)
+      row = _grid.SelectedRows[0];
+    else if (_grid.CurrentCell != null)
+      row = _grid.Rows[_grid.CurrentCell.RowIndex];
+    else if (_grid.Rows.Count > 0)
+      row = _grid.Rows[0];
+    if (row == null) return;
     using var dlg = new System.Windows.Forms.OpenFileDialog
     {
       Title = "Select template file",
@@ -477,7 +473,10 @@ internal sealed class GridView : DataGridView
     // Tell IsDialogMessage to deliver Tab/Enter/Esc as WM_KEYDOWN to us,
     // not treat them as dialog-navigation keystrokes.
     if (m.Msg == WM_GETDLGCODE)
+    {
+      VFileTypeTemplatePlugIn.TryLog($"[GridView] WM_GETDLGCODE base={m.Result} → adding DLGC_WANTALLKEYS");
       m.Result = (IntPtr)(m.Result.ToInt32() | DLGC_WANTALLKEYS);
+    }
   }
 
   protected override bool ProcessDialogKey(Keys keyData)
@@ -573,6 +572,7 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
     if (m.Msg == WM_KEYDOWN)
     {
       int vk = (int)m.WParam;
+      VFileTypeTemplatePlugIn.TryLog($"[EditCtrl] WM_KEYDOWN vk=0x{vk:X2}");
       if (vk == VK_TAB || vk == VK_RETURN || vk == VK_ESCAPE)
       {
         // Handle here before calling base — prevents the native EDIT proc ringing the bell.
@@ -581,18 +581,23 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
           switch (vk)
           {
             case VK_TAB:
+              VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Tab → NavigateCell");
               gv.CommitEdit(DataGridViewDataErrorContexts.Commit);
               gv.EndEdit();
               gv.NavigateCell((Control.ModifierKeys & Keys.Shift) != 0);
               break;
             case VK_RETURN:
+              VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Enter → CommitAndMoveNext");
               gv.CommitAndMoveNext();
               break;
             case VK_ESCAPE:
+              VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Esc → CancelAndExit");
               gv.CancelAndExit();
               break;
           }
         }
+        else
+          VFileTypeTemplatePlugIn.TryLog($"[EditCtrl] vk=0x{vk:X2} but EditingControlDataGridView is not GridView");
         m.Result = IntPtr.Zero;
         return; // do NOT call base
       }
@@ -601,7 +606,10 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
     base.WndProc(ref m);
 
     if (m.Msg == WM_GETDLGCODE)
+    {
+      VFileTypeTemplatePlugIn.TryLog($"[EditCtrl] WM_GETDLGCODE base={m.Result} → adding DLGC_WANTALLKEYS");
       m.Result = (IntPtr)(m.Result.ToInt32() | DLGC_WANTALLKEYS);
+    }
   }
 }
 
