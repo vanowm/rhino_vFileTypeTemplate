@@ -702,12 +702,24 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
 
     // WM_KILLFOCUS: the editing control lost focus to something outside the grid.
     // WinForms Leave events are unreliable in Rhino's native Win32 dialog context,
-    // so we intercept at the Win32 message level.  Post CommitAndExit via
-    // BeginInvoke so it runs after the current focus-change dispatch completes.
+    // so we intercept at the Win32 message level.
+    // IMPORTANT: capture the cell identity NOW; by the time the BeginInvoke runs,
+    // another action (e.g. Add button) may have already moved to a different cell
+    // and started a new edit.  Only commit+end if we are still on the same cell.
     if (m.Msg == WM_KILLFOCUS)
     {
       if (EditingControlDataGridView is GridView gv2 && gv2.IsHandleCreated)
-        gv2.BeginInvoke((Action)gv2.CommitAndExit);
+      {
+        var editRow = gv2.CurrentCell?.RowIndex ?? -1;
+        var editCol = gv2.CurrentCell?.ColumnIndex ?? -1;
+        gv2.BeginInvoke((Action)(() =>
+        {
+          if (gv2.IsCurrentCellInEditMode &&
+              gv2.CurrentCell?.RowIndex == editRow &&
+              gv2.CurrentCell?.ColumnIndex == editCol)
+            gv2.CommitAndExit();
+        }));
+      }
     }
 
     if (m.Msg == WM_GETDLGCODE)
