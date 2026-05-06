@@ -71,6 +71,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   public VFileTypeTemplateOptionsControl()
   {
     Dock = DockStyle.Fill;
+    BackColor = SystemColors.Control;
 
     // ---- Layout ----
     var layout = new TableLayoutPanel
@@ -79,6 +80,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       ColumnCount = 1,
       RowCount = 4,
       Padding = new Padding(8),
+      BackColor = SystemColors.Control,
     };
     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // 0: checkbox
@@ -235,10 +237,10 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     };
 
     // ---- Buttons ----
-    _addBtn    = MakeButton("Add",            OnAdd);
-    _removeBtn = MakeButton("Remove",          OnRemove);
-    _browseBtn = MakeButton("Browse\u2026",    OnBrowse);
-    _editBtn   = MakeButton("Edit template",   OnEditTemplate);
+    _addBtn    = MakeButton("&Add",            OnAdd);
+    _removeBtn = MakeButton("&Remove",          OnRemove);
+    _browseBtn = MakeButton("&Browse\u2026",    OnBrowse);
+    _editBtn   = MakeButton("&Edit template",   OnEditTemplate);
 
     var buttonPanel = new FlowLayoutPanel
     {
