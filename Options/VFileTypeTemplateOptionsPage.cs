@@ -178,55 +178,19 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     _grid.Leave += (s, e) =>
     {
       _grid.EndEdit();
-      // Clear all row highlights when focus leaves the grid entirely.
-      foreach (DataGridViewRow row in _grid.Rows)
-      {
-        row.DefaultCellStyle.BackColor    = Color.Empty;
-        row.DefaultCellStyle.ForeColor    = Color.Empty;
-        row.DefaultCellStyle.SelectionBackColor = Color.Empty;
-        row.DefaultCellStyle.SelectionForeColor = Color.Empty;
-      }
       RemoveEmptyRows();
     };
 
     // Mark row as "was edited" so RemoveEmptyRows will clean it up if still blank.
-    // Also clear the "editing-ended" row highlight when edit starts.
     _grid.CellBeginEdit += (s, e) =>
     {
-      var row = _grid.Rows[e.RowIndex];
-      row.Tag = true;
-      row.DefaultCellStyle.BackColor    = Color.Empty;
-      row.DefaultCellStyle.ForeColor    = Color.Empty;
-      row.DefaultCellStyle.SelectionBackColor = Color.Empty;
-      row.DefaultCellStyle.SelectionForeColor = Color.Empty;
+      _grid.Rows[e.RowIndex].Tag = true;
     };
 
-    // Highlight the row when editing ends to show it still has focus.
+    // Remove empty rows when a cell edit ends.
     _grid.CellEndEdit += (s, e) =>
     {
-      var row = _grid.Rows[e.RowIndex];
-      row.DefaultCellStyle.BackColor    = SystemColors.Info;
-      row.DefaultCellStyle.ForeColor    = SystemColors.InfoText;
-      row.DefaultCellStyle.SelectionBackColor = SystemColors.Info;
-      row.DefaultCellStyle.SelectionForeColor = SystemColors.InfoText;
       BeginInvoke((Action)RemoveEmptyRows);
-    };
-
-    // Clear highlight when selection moves to a different row.
-    _grid.SelectionChanged += (s, e) =>
-    {
-      var currentRow = _grid.CurrentCell?.RowIndex ?? -1;
-      foreach (DataGridViewRow row in _grid.Rows)
-      {
-        if (row.Index == currentRow) continue;
-        if (row.DefaultCellStyle.BackColor == SystemColors.Info)
-        {
-          row.DefaultCellStyle.BackColor    = Color.Empty;
-          row.DefaultCellStyle.ForeColor    = Color.Empty;
-          row.DefaultCellStyle.SelectionBackColor = Color.Empty;
-          row.DefaultCellStyle.SelectionForeColor = Color.Empty;
-        }
-      }
     };
 
     // Single click on a data cell → immediately enter edit mode.
@@ -236,11 +200,14 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
         _grid.BeginEdit(true);
     };
 
-    // Show "<Default>" cue text in the TemplatePath editing control while empty;
-    // show shortened path as the editable text; clear cue banner for other columns.
+    // When the editing control loses focus (e.g. clicking a button), commit the
+    // current value so it isn’t lost. Unsubscribe-then-subscribe to avoid
+    // duplicates (the same editing control instance is reused across cells).
     _grid.EditingControlShowing += (s, e) =>
     {
       if (e.Control is not GridTextBoxEditingControl tb) return;
+      tb.Leave -= CommitOnEditingControlLeave;
+      tb.Leave += CommitOnEditingControlLeave;
       if (_grid.CurrentCell?.ColumnIndex == _grid.Columns["TemplatePath"].Index)
       {
         tb.SetCueBanner("<Default>");
@@ -430,6 +397,12 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   // ---- Button handlers ----
 
+  private void CommitOnEditingControlLeave(object? sender, EventArgs e)
+  {
+    if (_grid.IsCurrentCellInEditMode)
+      _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+  }
+
   private void RemoveEmptyRows()
   {
     // Only remove rows where: both cells are blank AND at least one cell was
@@ -581,10 +554,22 @@ internal sealed class GridView : DataGridView
 {
   // Win32 constants for DLGC_WANTALLKEYS at the DataGridView level.
   private const int WM_GETDLGCODE    = 0x0087;
+  private const int WM_KEYDOWN       = 0x0100;
   private const int DLGC_WANTALLKEYS = 0x0004;
+  private const int VK_RETURN        = 0x0D;
 
   protected override void WndProc(ref Message m)
   {
+    // Enter key while not in edit mode — start editing the current cell.
+    // Must intercept here: ProcessDialogKey is not reliably called in Rhino’s
+    // native Win32 dialog context.
+    if (m.Msg == WM_KEYDOWN && (int)m.WParam == VK_RETURN &&
+        !IsCurrentCellInEditMode && CurrentCell != null)
+    {
+      BeginEdit(true);
+      return; // consume — editing control must not see this Enter
+    }
+
     base.WndProc(ref m);
     if (m.Msg == WM_GETDLGCODE)
     {
@@ -598,9 +583,6 @@ internal sealed class GridView : DataGridView
     switch (keyData & Keys.KeyCode)
     {
       case Keys.Enter:
-        if (!IsCurrentCellInEditMode && CurrentCell != null)
-          BeginInvoke((Action)(() => BeginEdit(true)));
-        return true;   // consumed — dialog stays open
       case Keys.Escape:
         return true;   // consumed — dialog stays open
     }
