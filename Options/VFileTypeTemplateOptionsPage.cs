@@ -698,29 +698,20 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
       return; // do NOT call base
     }
 
-    base.WndProc(ref m);
-
-    // WM_KILLFOCUS: the editing control lost focus to something outside the grid.
-    // WinForms Leave events are unreliable in Rhino's native Win32 dialog context,
-    // so we intercept at the Win32 message level.
-    // IMPORTANT: capture the cell identity NOW; by the time the BeginInvoke runs,
-    // another action (e.g. Add button) may have already moved to a different cell
-    // and started a new edit.  Only commit+end if we are still on the same cell.
+    // WM_KILLFOCUS: focus is leaving this editing control.
+    // Call CommitEdit+EndEdit SYNCHRONOUSLY, before base.WndProc processes the
+    // focus change.  This ensures the cell exits edit mode immediately, so the
+    // control that is receiving focus (button, checkbox, etc.) can handle its
+    // WM_LBUTTONUP / click event without any queued deferred actions interfering.
+    // EndEdit only hides the editing control (WinForms reuses it); it does NOT
+    // destroy the object, so returning from WndProc after is safe.
     if (m.Msg == WM_KILLFOCUS)
     {
-      if (EditingControlDataGridView is GridView gv2 && gv2.IsHandleCreated)
-      {
-        var editRow = gv2.CurrentCell?.RowIndex ?? -1;
-        var editCol = gv2.CurrentCell?.ColumnIndex ?? -1;
-        gv2.BeginInvoke((Action)(() =>
-        {
-          if (gv2.IsCurrentCellInEditMode &&
-              gv2.CurrentCell?.RowIndex == editRow &&
-              gv2.CurrentCell?.ColumnIndex == editCol)
-            gv2.CommitAndExit();
-        }));
-      }
+      if (EditingControlDataGridView is GridView gv2)
+        gv2.CommitAndExit();
     }
+
+    base.WndProc(ref m);
 
     if (m.Msg == WM_GETDLGCODE)
     {
