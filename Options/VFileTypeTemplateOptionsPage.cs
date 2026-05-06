@@ -71,7 +71,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   public VFileTypeTemplateOptionsControl()
   {
     Dock = DockStyle.Fill;
-    BackColor = SystemColors.Control;
+    BackColor = SystemColors.Window;
 
     // ---- Layout ----
     var layout = new TableLayoutPanel
@@ -80,7 +80,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       ColumnCount = 1,
       RowCount = 4,
       Padding = new Padding(8),
-      BackColor = SystemColors.Control,
+      BackColor = SystemColors.Window,
     };
     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // 0: checkbox
@@ -401,8 +401,17 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void CommitOnEditingControlLeave(object? sender, EventArgs e)
   {
-    if (_grid.IsCurrentCellInEditMode)
-      _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+    if (!_grid.IsCurrentCellInEditMode) return;
+    var rowIndex = _grid.CurrentCell?.RowIndex ?? -1;
+    _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+    // Defer EndEdit and row re-selection to after the focus change completes.
+    BeginInvoke((Action)(() =>
+    {
+      if (_grid.IsCurrentCellInEditMode) _grid.EndEdit();
+      // Ensure the full row stays selected (FullRowSelect mode).
+      if (rowIndex >= 0 && rowIndex < _grid.RowCount)
+        _grid.Rows[rowIndex].Selected = true;
+    }));
   }
 
   private void RemoveEmptyRows()
