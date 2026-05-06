@@ -589,6 +589,20 @@ internal sealed class GridView : DataGridView
     }
   }
 
+  // Force selection highlight even when the grid (or its editing control) does
+  // not have keyboard focus.  WinForms normally paints a dull inactive colour
+  // in that case; overriding CellPainting before base runs changes the resolved
+  // style so the active Highlight colour is used instead.
+  protected override void OnCellPainting(DataGridViewCellPaintingEventArgs e)
+  {
+    if (e.RowIndex >= 0 && (e.State & DataGridViewElementStates.Selected) != 0)
+    {
+      e.CellStyle.SelectionBackColor = SystemColors.Highlight;
+      e.CellStyle.SelectionForeColor = SystemColors.HighlightText;
+    }
+    base.OnCellPainting(e);
+  }
+
   protected override bool ProcessDialogKey(Keys keyData)
   {
     switch (keyData & Keys.KeyCode)
