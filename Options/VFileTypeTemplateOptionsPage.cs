@@ -569,12 +569,13 @@ internal sealed class GridView : DataGridView
   private const int DLGC_WANTALLKEYS = 0x0004;
   private const int VK_RETURN        = 0x0D;
 
-  // When the editing control child has focus, DataGridView.Focused returns false
-  // and WinForms switches to the inactive (gray) selection palette.  Pretend the
-  // grid is focused whenever its editing control holds focus so rows always paint
-  // with the active Highlight colour.
-  public override bool Focused =>
-      base.Focused || (IsCurrentCellInEditMode && EditingControl?.ContainsFocus == true);
+  // DataGridView internally checks `this.Focused` during cell painting to choose
+  // between active (Highlight) and inactive (Control) selection colours.  It does
+  // this AFTER OnCellPainting and AFTER DefaultCellStyle — there is no other hook.
+  // Returning true whenever any row is selected makes all selected rows always
+  // paint with the active highlight colour, regardless of which control actually
+  // holds keyboard focus.
+  public override bool Focused => base.Focused || ContainsFocus || SelectedRows.Count > 0;
 
   protected override void WndProc(ref Message m)
   {
@@ -594,20 +595,6 @@ internal sealed class GridView : DataGridView
       VFileTypeTemplatePlugIn.TryLog($"[GridView] WM_GETDLGCODE base={m.Result} → adding DLGC_WANTALLKEYS");
       m.Result = (IntPtr)(m.Result.ToInt32() | DLGC_WANTALLKEYS);
     }
-  }
-
-  // Force selection highlight even when the grid (or its editing control) does
-  // not have keyboard focus.  WinForms normally paints a dull inactive colour
-  // in that case; overriding CellPainting before base runs changes the resolved
-  // style so the active Highlight colour is used instead.
-  protected override void OnCellPainting(DataGridViewCellPaintingEventArgs e)
-  {
-    if (e.RowIndex >= 0 && (e.State & DataGridViewElementStates.Selected) != 0)
-    {
-      e.CellStyle.SelectionBackColor = SystemColors.Highlight;
-      e.CellStyle.SelectionForeColor = SystemColors.HighlightText;
-    }
-    base.OnCellPainting(e);
   }
 
   protected override bool ProcessDialogKey(Keys keyData)
