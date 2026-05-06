@@ -71,7 +71,6 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
   public VFileTypeTemplateOptionsControl()
   {
     Dock = DockStyle.Fill;
-    BackColor = SystemColors.Window;
 
     // ---- Layout ----
     var layout = new TableLayoutPanel
@@ -80,7 +79,6 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       ColumnCount = 1,
       RowCount = 4,
       Padding = new Padding(8),
-      BackColor = SystemColors.Window,
     };
     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // 0: checkbox
@@ -118,6 +116,8 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     };
     _grid.DefaultCellStyle.BackColor = SystemColors.Window;
     _grid.DefaultCellStyle.ForeColor = SystemColors.ControlText;
+    _grid.DefaultCellStyle.SelectionBackColor = SystemColors.Highlight;
+    _grid.DefaultCellStyle.SelectionForeColor = SystemColors.HighlightText;
     _grid.AlternatingRowsDefaultCellStyle.BackColor = SystemColors.Window;
 
     _grid.Columns.Add(new GridTextBoxColumn
