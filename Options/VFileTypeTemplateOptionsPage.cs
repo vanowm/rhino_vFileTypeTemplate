@@ -110,6 +110,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       GridColor = SystemColors.ControlLight,
       BorderStyle = BorderStyle.FixedSingle,
       EnableHeadersVisualStyles = true,
+      ShowCellToolTips = false,
       EditMode = DataGridViewEditMode.EditOnF2,
       AllowUserToResizeRows = false,   // prevents SizeNS cursor in edit mode
     };
@@ -267,10 +268,10 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     };
 
     // ---- Buttons ----
-    _addBtn    = MakeButton("&Add",              OnAdd);
-    _removeBtn = MakeButton("&Remove",           OnRemove);
-    _browseBtn = MakeButton("&Browse…",          OnBrowse);
-    _editBtn   = MakeButton("&Edit template",    OnEditTemplate);
+    _addBtn    = MakeButton("Add",            OnAdd);
+    _removeBtn = MakeButton("Remove",          OnRemove);
+    _browseBtn = MakeButton("Browse\u2026",    OnBrowse);
+    _editBtn   = MakeButton("Edit template",   OnEditTemplate);
 
     var buttonPanel = new FlowLayoutPanel
     {
@@ -448,6 +449,9 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   private void OnAdd(object? sender, EventArgs e)
   {
+    // Commit any in-progress edit first so the cell value is visible to the check below.
+    _grid.EndEdit();
+
     // Navigate to existing empty-extension row instead of adding a duplicate.
     var existing = _grid.Rows.Cast<DataGridViewRow>()
       .FirstOrDefault(r => !r.IsNewRow &&
@@ -455,6 +459,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     if (existing != null)
     {
       _grid.CurrentCell = existing.Cells["Extension"];
+      BeginInvoke((Action)(() => _grid.BeginEdit(true)));
       return;
     }
     var idx = _grid.Rows.Add(string.Empty, string.Empty);
@@ -519,6 +524,10 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       _grid.EndEdit();
       row.Cells["TemplatePath"].Value = shortPath;
     }
+
+    // Move focus to the Extension cell of this row so the user can verify/edit it.
+    _grid.CurrentCell = row.Cells["Extension"];
+    _grid.Focus();
   }
 
   private void OnEditTemplate(object? sender, EventArgs e)
@@ -590,7 +599,7 @@ internal sealed class GridView : DataGridView
     {
       case Keys.Enter:
         if (!IsCurrentCellInEditMode && CurrentCell != null)
-          BeginEdit(true);
+          BeginInvoke((Action)(() => BeginEdit(true)));
         return true;   // consumed — dialog stays open
       case Keys.Escape:
         return true;   // consumed — dialog stays open
