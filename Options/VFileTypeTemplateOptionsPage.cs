@@ -569,6 +569,13 @@ internal sealed class GridView : DataGridView
   private const int DLGC_WANTALLKEYS = 0x0004;
   private const int VK_RETURN        = 0x0D;
 
+  // When the editing control child has focus, DataGridView.Focused returns false
+  // and WinForms switches to the inactive (gray) selection palette.  Pretend the
+  // grid is focused whenever its editing control holds focus so rows always paint
+  // with the active Highlight colour.
+  public override bool Focused =>
+      base.Focused || (IsCurrentCellInEditMode && EditingControl?.ContainsFocus == true);
+
   protected override void WndProc(ref Message m)
   {
     // Enter key while not in edit mode — start editing the current cell.
