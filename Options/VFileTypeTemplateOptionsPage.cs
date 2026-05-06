@@ -650,6 +650,7 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
   private const int  WM_GETDLGCODE    = 0x0087;
   private const int  WM_KEYDOWN       = 0x0100;
   private const int  WM_CHAR          = 0x0102;
+  private const int  WM_KILLFOCUS     = 0x0008;
   private const int  DLGC_WANTALLKEYS = 0x0004;
   private const int  VK_TAB           = 0x09;
   private const uint EM_SETCUEBANNER  = 0x1501;
@@ -698,6 +699,16 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
     }
 
     base.WndProc(ref m);
+
+    // WM_KILLFOCUS: the editing control lost focus to something outside the grid.
+    // WinForms Leave events are unreliable in Rhino's native Win32 dialog context,
+    // so we intercept at the Win32 message level.  Post CommitAndExit via
+    // BeginInvoke so it runs after the current focus-change dispatch completes.
+    if (m.Msg == WM_KILLFOCUS)
+    {
+      if (EditingControlDataGridView is GridView gv2 && gv2.IsHandleCreated)
+        gv2.BeginInvoke((Action)gv2.CommitAndExit);
+    }
 
     if (m.Msg == WM_GETDLGCODE)
     {
