@@ -9,10 +9,10 @@
     <Title>vFileTypeTemplate</Title>
     <RootNamespace>VFileTypeTemplate</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>26.05.05.134943</Version>
-    <InformationalVersion>26.05.05.134943</InformationalVersion>
-    <AssemblyVersion>26.5.5.1349</AssemblyVersion>
-    <FileVersion>26.5.5.1349</FileVersion>
+    <Version>26.5.7.1029</Version>
+    <InformationalVersion>26.5.7.1029</InformationalVersion>
+    <AssemblyVersion>26.5.7.1029</AssemblyVersion>
+    <FileVersion>26.5.7.1029</FileVersion>
     <!-- Fail fast when output files are locked (no retry loop). -->
     <CopyRetryCount>0</CopyRetryCount>
     <CopyRetryDelayMilliseconds>0</CopyRetryDelayMilliseconds>
