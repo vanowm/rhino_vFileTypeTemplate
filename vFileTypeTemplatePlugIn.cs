@@ -37,7 +37,8 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
     var version = (!string.IsNullOrEmpty(asm.Location)
       ? System.Diagnostics.FileVersionInfo.GetVersionInfo(asm.Location).FileVersion
       : null) ?? asm.GetName().Version?.ToString() ?? "unknown";
-    TryLog($"OnLoad OK. Version={version}. Assembly={GetType().Assembly.Location}");
+    Log.Initialize();
+    Log.Write($"startup  rhino={RhinoApp.Version}  version={version}  dll={asm.Location}");
     RhinoApp.WriteLine($"vFileTypeTemplate v{version} loaded.");
     return LoadReturnCode.Success;
   }
@@ -79,11 +80,11 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
     var templatePath = ResolveTemplatePath(mapping.TemplatePath);
     if (string.IsNullOrEmpty(templatePath))
     {
-      TryLog($"No template resolved for extension {ext}; skipping.");
+      Log.Write($"No template resolved for extension {ext}; skipping.");
       return;
     }
 
-    TryLog($"Applying template '{templatePath}' to '{fileName}'");
+    Log.Write($"Applying template '{templatePath}' to '{fileName}'");
     RhinoApp.WriteLine($"vFileTypeTemplate: detected {Path.GetFileName(fileName)} — queuing template '{Path.GetFileName(templatePath)}'");
 
     // Defer apply to Rhino's next idle tick so the open-document command has
@@ -139,7 +140,7 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
       }
 
       // Configured path specified but file not found — skip entirely; do not fall back.
-      TryLog($"ResolveTemplatePath: configured template not found '{configuredPath}'; skipping.");
+      Log.Write($"ResolveTemplatePath: configured template not found '{configuredPath}'; skipping.");
       return string.Empty;
     }
 
@@ -171,7 +172,7 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
       Path.GetExtension(sourceFilePath).Equals(".dxf", StringComparison.OrdinalIgnoreCase);
     int dxfInsUnitsCode = isDxfFile ? ReadDxfInsUnits(sourceFilePath) : 0;
     var dxfModelUnits = DxfInsUnitsToRhino(dxfInsUnitsCode);
-    TryLog($"ApplyTemplate: source file units — $INSUNITS={dxfInsUnitsCode} → {dxfModelUnits}");
+    Log.Write($"ApplyTemplate: source file units — $INSUNITS={dxfInsUnitsCode} → {dxfModelUnits}");
 
     // Snapshot doc properties before applying so the user can undo everything.
     var beforeSnapshot = TakeDocSnapshot(doc);
@@ -187,7 +188,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       templateFile = File3dm.Read(templatePath);
       if (templateFile == null)
       {
-        TryLog($"Failed to read template: {templatePath}");
+        Log.Write($"Failed to read template: {templatePath}");
         return;
       }
 
@@ -206,7 +207,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       // Phase 2: Apply runtime-only settings via a headless RhinoDoc.
       headlessDoc = RhinoDoc.CreateHeadless(templatePath);
       if (headlessDoc == null)
-        TryLog("CreateHeadless returned null — runtime settings not applied.");
+        Log.Write("CreateHeadless returned null — runtime settings not applied.");
       else
         ApplyRuntimeSettings(doc, headlessDoc);
 
@@ -223,7 +224,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
     }
     catch (Exception ex)
     {
-      TryLog($"Error applying template: {ex.Message}");
+      Log.Write($"Error applying template: {ex.Message}");
     }
     finally
     {
@@ -234,7 +235,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
     }
 
     doc.Views.Redraw();
-    TryLog($"Template applied successfully from: {templatePath}");
+    Log.Write($"Template applied successfully from: {templatePath}");
     RhinoApp.WriteLine($"vFileTypeTemplate: template '{Path.GetFileName(templatePath)}' applied to {Path.GetFileName(sourceFilePath)}.");
   }
 
@@ -256,7 +257,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         fs.ReadExactly(sig);
       if (System.Text.Encoding.ASCII.GetString(sig).StartsWith("AutoCAD Binary DXF"))
       {
-        TryLog("ReadDxfInsUnits: binary DXF — $INSUNITS not parsed, template units apply.");
+        Log.Write("ReadDxfInsUnits: binary DXF — $INSUNITS not parsed, template units apply.");
         return 0;
       }
     }
@@ -341,14 +342,14 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
     {
       if (dxfModelUnits == Rhino.UnitSystem.None)
       {
-        TryLog($"RestoreDxfUnits: DXF had no explicit units ($INSUNITS=0) — template units kept ({doc.ModelUnitSystem}).");
+        Log.Write($"RestoreDxfUnits: DXF had no explicit units ($INSUNITS=0) — template units kept ({doc.ModelUnitSystem}).");
         return;
       }
 
       var templateUnits = doc.ModelUnitSystem;
       if (templateUnits == dxfModelUnits)
       {
-        TryLog($"RestoreDxfUnits: DXF and template units match ({dxfModelUnits}) — no change.");
+        Log.Write($"RestoreDxfUnits: DXF and template units match ({dxfModelUnits}) — no change.");
         return;
       }
 
@@ -357,9 +358,9 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       var scaledTol = doc.ModelAbsoluteTolerance * scale;
       doc.ModelAbsoluteTolerance = scaledTol;
       doc.ModelUnitSystem = dxfModelUnits;
-      TryLog($"RestoreDxfUnits: {templateUnits}→{dxfModelUnits} scale={scale:G6}, ModelAbsTol={scaledTol:G6}, ModelUnits={doc.ModelUnitSystem}");
+      Log.Write($"RestoreDxfUnits: {templateUnits}→{dxfModelUnits} scale={scale:G6}, ModelAbsTol={scaledTol:G6}, ModelUnits={doc.ModelUnitSystem}");
     }
-    catch (Exception ex) { TryLog($"RestoreDxfUnitSystem failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"RestoreDxfUnitSystem failed: {ex.Message}"); }
   }
 
   private static void ApplyDocumentSettings(RhinoDoc doc, File3dm templateFile)
@@ -367,8 +368,8 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
     try
     {
       var s = templateFile.Settings;
-      TryLog($"ApplyDocumentSettings: template ModelUnits={s.ModelUnitSystem} AbsTol={s.ModelAbsoluteTolerance} ModelRelTol={s.ModelRelativeTolerance} AngleTol={s.ModelAngleToleranceDegrees} PageUnits={s.PageUnitSystem} PageAbsTol={s.PageAbsoluteTolerance} PageRelTol={s.PageRelativeTolerance} PageAngleTol={s.PageAngleToleranceDegrees}");
-      TryLog($"ApplyDocumentSettings: doc BEFORE ModelUnits={doc.ModelUnitSystem} AbsTol={doc.ModelAbsoluteTolerance} RelTol={doc.ModelRelativeTolerance} AngleTol={doc.ModelAngleToleranceDegrees}");
+      Log.Write($"ApplyDocumentSettings: template ModelUnits={s.ModelUnitSystem} AbsTol={s.ModelAbsoluteTolerance} ModelRelTol={s.ModelRelativeTolerance} AngleTol={s.ModelAngleToleranceDegrees} PageUnits={s.PageUnitSystem} PageAbsTol={s.PageAbsoluteTolerance} PageRelTol={s.PageRelativeTolerance} PageAngleTol={s.PageAngleToleranceDegrees}");
+      Log.Write($"ApplyDocumentSettings: doc BEFORE ModelUnits={doc.ModelUnitSystem} AbsTol={doc.ModelAbsoluteTolerance} RelTol={doc.ModelRelativeTolerance} AngleTol={doc.ModelAngleToleranceDegrees}");
 
       doc.ModelUnitSystem = s.ModelUnitSystem;
       doc.ModelAbsoluteTolerance = s.ModelAbsoluteTolerance;
@@ -379,14 +380,14 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       doc.PageRelativeTolerance = s.PageRelativeTolerance;
       doc.PageAngleToleranceDegrees = s.PageAngleToleranceDegrees;
 
-      TryLog($"ApplyDocumentSettings: doc AFTER  ModelUnits={doc.ModelUnitSystem} AbsTol={doc.ModelAbsoluteTolerance} RelTol={doc.ModelRelativeTolerance} AngleTol={doc.ModelAngleToleranceDegrees}");
+      Log.Write($"ApplyDocumentSettings: doc AFTER  ModelUnits={doc.ModelUnitSystem} AbsTol={doc.ModelAbsoluteTolerance} RelTol={doc.ModelRelativeTolerance} AngleTol={doc.ModelAngleToleranceDegrees}");
 
       // NOTE: ModelDistanceDisplayPrecision, display format, and mesh quality are handled
       // in Phase 2 via a headless RhinoDoc (not accessible from File3dm).
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyDocumentSettings failed: {ex.Message}\n{ex.StackTrace}");
+      Log.Write($"ApplyDocumentSettings failed: {ex.Message}\n{ex.StackTrace}");
     }
   }
 
@@ -395,12 +396,12 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
     // Display precision
     try
     {
-      TryLog($"ApplyRuntimeSettings: template ModelDistPrec={templateDoc.ModelDistanceDisplayPrecision} PageDistPrec={templateDoc.PageDistanceDisplayPrecision}");
+      Log.Write($"ApplyRuntimeSettings: template ModelDistPrec={templateDoc.ModelDistanceDisplayPrecision} PageDistPrec={templateDoc.PageDistanceDisplayPrecision}");
       doc.ModelDistanceDisplayPrecision = templateDoc.ModelDistanceDisplayPrecision;
       doc.PageDistanceDisplayPrecision = templateDoc.PageDistanceDisplayPrecision;
-      TryLog($"ApplyRuntimeSettings: doc AFTER ModelDistPrec={doc.ModelDistanceDisplayPrecision} PageDistPrec={doc.PageDistanceDisplayPrecision}");
+      Log.Write($"ApplyRuntimeSettings: doc AFTER ModelDistPrec={doc.ModelDistanceDisplayPrecision} PageDistPrec={doc.PageDistanceDisplayPrecision}");
     }
-    catch (Exception ex) { TryLog($"ApplyRuntimeSettings display precision failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"ApplyRuntimeSettings display precision failed: {ex.Message}"); }
 
     // Display format (Decimal / Feet / FeetAndInches) — accessed via internal API reflection.
     try
@@ -409,20 +410,20 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       int pageMode  = GetDistanceDisplayMode(templateDoc, true);
       SetDistanceDisplayMode(doc, modelMode, false);
       SetDistanceDisplayMode(doc, pageMode,  true);
-      TryLog($"ApplyRuntimeSettings: DistanceDisplayMode model={modelMode} page={pageMode}");
+      Log.Write($"ApplyRuntimeSettings: DistanceDisplayMode model={modelMode} page={pageMode}");
     }
-    catch (Exception ex) { TryLog($"ApplyRuntimeSettings display format failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"ApplyRuntimeSettings display format failed: {ex.Message}"); }
 
     // Mesh quality
     try
     {
       var style = templateDoc.MeshingParameterStyle;
-      TryLog($"ApplyRuntimeSettings: MeshingStyle={style}");
+      Log.Write($"ApplyRuntimeSettings: MeshingStyle={style}");
       doc.MeshingParameterStyle = style;
       if (style == MeshingParameterStyle.Custom)
         doc.SetCustomMeshingParameters(templateDoc.GetCurrentMeshingParameters());
     }
-    catch (Exception ex) { TryLog($"ApplyRuntimeSettings meshing failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"ApplyRuntimeSettings meshing failed: {ex.Message}"); }
 
     // Annotation and hatch scaling
     try
@@ -432,25 +433,25 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       doc.ModelSpaceHatchScalingEnabled = templateDoc.ModelSpaceHatchScalingEnabled;
       doc.ModelSpaceHatchScale = templateDoc.ModelSpaceHatchScale;
       doc.LayoutSpaceAnnotationScalingEnabled = templateDoc.LayoutSpaceAnnotationScalingEnabled;
-      TryLog($"ApplyRuntimeSettings: AnnotScaling={doc.ModelSpaceAnnotationScalingEnabled} TextScale={doc.ModelSpaceTextScale} HatchScaling={doc.ModelSpaceHatchScalingEnabled}");
+      Log.Write($"ApplyRuntimeSettings: AnnotScaling={doc.ModelSpaceAnnotationScalingEnabled} TextScale={doc.ModelSpaceTextScale} HatchScaling={doc.ModelSpaceHatchScalingEnabled}");
     }
-    catch (Exception ex) { TryLog($"ApplyRuntimeSettings annotation/hatch scaling failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"ApplyRuntimeSettings annotation/hatch scaling failed: {ex.Message}"); }
 
     // SubD appearance
     try
     {
       doc.SubDAppearance = templateDoc.SubDAppearance;
-      TryLog($"ApplyRuntimeSettings: SubDAppearance={doc.SubDAppearance}");
+      Log.Write($"ApplyRuntimeSettings: SubDAppearance={doc.SubDAppearance}");
     }
-    catch (Exception ex) { TryLog($"ApplyRuntimeSettings SubD failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"ApplyRuntimeSettings SubD failed: {ex.Message}"); }
 
     // Render settings
     try
     {
       doc.RenderSettings = templateDoc.RenderSettings;
-      TryLog("ApplyRuntimeSettings: RenderSettings applied.");
+      Log.Write("ApplyRuntimeSettings: RenderSettings applied.");
     }
-    catch (Exception ex) { TryLog($"ApplyRuntimeSettings RenderSettings failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"ApplyRuntimeSettings RenderSettings failed: {ex.Message}"); }
 
     // Ground plane
     try
@@ -465,15 +466,15 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       dstGp.AutoAltitude = srcGp.AutoAltitude;
       dstGp.ShadowOnly = srcGp.ShadowOnly;
       dstGp.EndChange();
-      TryLog($"ApplyRuntimeSettings: GroundPlane Enabled={srcGp.Enabled} Altitude={srcGp.Altitude} AutoAlt={srcGp.AutoAltitude}");
+      Log.Write($"ApplyRuntimeSettings: GroundPlane Enabled={srcGp.Enabled} Altitude={srcGp.Altitude} AutoAlt={srcGp.AutoAltitude}");
     }
-    catch (Exception ex) { TryLog($"ApplyRuntimeSettings GroundPlane failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"ApplyRuntimeSettings GroundPlane failed: {ex.Message}"); }
 
     // Grid — read from headless doc viewports (they carry the template's CPlane grid data)
     try
     {
       var templateViews = templateDoc.Views.GetStandardRhinoViews();
-      TryLog($"ApplyRuntimeSettings: headless doc has {templateViews.Length} views");
+      Log.Write($"ApplyRuntimeSettings: headless doc has {templateViews.Length} views");
 
       ConstructionPlane? srcGrid = null;
       foreach (var tv in templateViews)
@@ -487,7 +488,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
 
       if (srcGrid != null)
       {
-        TryLog($"ApplyRuntimeSettings: grid source GridSpacing={srcGrid.GridSpacing} SnapSpacing={srcGrid.SnapSpacing} GridLineCount={srcGrid.GridLineCount} ThickLineFreq={srcGrid.ThickLineFrequency}");
+        Log.Write($"ApplyRuntimeSettings: grid source GridSpacing={srcGrid.GridSpacing} SnapSpacing={srcGrid.SnapSpacing} GridLineCount={srcGrid.GridLineCount} ThickLineFreq={srcGrid.ThickLineFrequency}");
         foreach (var view in doc.Views)
         {
           try
@@ -502,9 +503,9 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
             cplane.ShowAxes = srcGrid.ShowAxes;
             vp.SetConstructionPlane(cplane);
             var after = vp.GetConstructionPlane();
-            TryLog($"ApplyRuntimeSettings: grid '{vp.Name}' GridSpacing={after.GridSpacing} SnapSpacing={after.SnapSpacing} GridLineCount={after.GridLineCount}");
+            Log.Write($"ApplyRuntimeSettings: grid '{vp.Name}' GridSpacing={after.GridSpacing} SnapSpacing={after.SnapSpacing} GridLineCount={after.GridLineCount}");
           }
-          catch (Exception vpEx) { TryLog($"ApplyRuntimeSettings grid viewport error: {vpEx.Message}"); }
+          catch (Exception vpEx) { Log.Write($"ApplyRuntimeSettings grid viewport error: {vpEx.Message}"); }
         }
       }
       else
@@ -512,10 +513,10 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         // Headless doc had no views — fall back to grid defaults
         var defaults = templateDoc.GetGridDefaults();
         doc.SetGridDefaults(defaults);
-        TryLog("ApplyRuntimeSettings: grid applied via GetGridDefaults (headless doc had no views).");
+        Log.Write("ApplyRuntimeSettings: grid applied via GetGridDefaults (headless doc had no views).");
       }
     }
-    catch (Exception ex) { TryLog($"ApplyRuntimeSettings grid failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"ApplyRuntimeSettings grid failed: {ex.Message}"); }
   }
 
   private static void ApplyNotes(RhinoDoc doc, File3dm templateFile)
@@ -525,21 +526,21 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       var notesText = templateFile.Notes?.Notes;
       if (string.IsNullOrEmpty(notesText))
       {
-        TryLog("ApplyNotes: template has no notes.");
+        Log.Write("ApplyNotes: template has no notes.");
         return;
       }
       // Only apply if the document doesn't already have notes (DXF files don't have notes).
       if (!string.IsNullOrEmpty(doc.Notes))
       {
-        TryLog($"ApplyNotes: doc already has notes ({doc.Notes.Length} chars), skipped.");
+        Log.Write($"ApplyNotes: doc already has notes ({doc.Notes.Length} chars), skipped.");
         return;
       }
       doc.Notes = notesText;
-      TryLog($"ApplyNotes: applied ({notesText.Length} chars).");
+      Log.Write($"ApplyNotes: applied ({notesText.Length} chars).");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyNotes failed: {ex.Message}");
+      Log.Write($"ApplyNotes failed: {ex.Message}");
     }
   }
 
@@ -551,22 +552,22 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       var eap = templateFile.EarthAnchorPoint;
       if (eap != null && eap.EarthLocationIsSet())
       {
-        TryLog($"ApplyLocation: EarthAnchorPoint lat={eap.EarthBasepointLatitude} lon={eap.EarthBasepointLongitude}");
+        Log.Write($"ApplyLocation: EarthAnchorPoint lat={eap.EarthBasepointLatitude} lon={eap.EarthBasepointLongitude}");
         doc.EarthAnchorPoint = eap;
       }
       else
       {
-        TryLog("ApplyLocation: template EarthAnchorPoint not set.");
+        Log.Write("ApplyLocation: template EarthAnchorPoint not set.");
       }
 
       // Model basepoint (used when inserting this model as a block)
       var bp = templateFile.Settings.ModelBasepoint;
       doc.ModelBasepoint = bp;
-      TryLog($"ApplyLocation: ModelBasepoint={bp}");
+      Log.Write($"ApplyLocation: ModelBasepoint={bp}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyLocation failed: {ex.Message}");
+      Log.Write($"ApplyLocation failed: {ex.Message}");
     }
   }
 
@@ -577,7 +578,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       var templateStrings = templateFile.Strings;
       if (templateStrings == null || templateStrings.Count == 0)
       {
-        TryLog("ApplyDocumentStrings: template has no document user strings.");
+        Log.Write("ApplyDocumentStrings: template has no document user strings.");
         return;
       }
 
@@ -594,11 +595,11 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         doc.Strings.SetString(key, value);
         added++;
       }
-      TryLog($"ApplyDocumentStrings: added={added} skipped={skipped}");
+      Log.Write($"ApplyDocumentStrings: added={added} skipped={skipped}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyDocumentStrings failed: {ex.Message}");
+      Log.Write($"ApplyDocumentStrings failed: {ex.Message}");
     }
   }
 
@@ -653,13 +654,13 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
           doc.Layers.Add(newLayer);
           addedLayers++;
         }
-        catch (Exception layerEx) { TryLog($"ApplyLayers: failed to add '{fullPath}': {layerEx.Message}"); }
+        catch (Exception layerEx) { Log.Write($"ApplyLayers: failed to add '{fullPath}': {layerEx.Message}"); }
       }
-      TryLog($"ApplyLayers: total={totalLayers} added={addedLayers} skipped(already exist)={skippedLayers}");
+      Log.Write($"ApplyLayers: total={totalLayers} added={addedLayers} skipped(already exist)={skippedLayers}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyLayers failed: {ex.Message}");
+      Log.Write($"ApplyLayers failed: {ex.Message}");
     }
   }
 
@@ -685,13 +686,13 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         }
 
         try { doc.Linetypes.Add(linetype); added++; }
-        catch (Exception ex2) { TryLog($"ApplyLinetypes: failed to add '{name}': {ex2.Message}"); }
+        catch (Exception ex2) { Log.Write($"ApplyLinetypes: failed to add '{name}': {ex2.Message}"); }
       }
-      TryLog($"ApplyLinetypes: added={added} skipped={skipped}");
+      Log.Write($"ApplyLinetypes: added={added} skipped={skipped}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyLinetypes failed: {ex.Message}");
+      Log.Write($"ApplyLinetypes failed: {ex.Message}");
     }
   }
 
@@ -716,13 +717,13 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         }
 
         try { doc.HatchPatterns.Add(hp); added++; }
-        catch (Exception ex2) { TryLog($"ApplyHatchPatterns: failed to add '{name}': {ex2.Message}"); }
+        catch (Exception ex2) { Log.Write($"ApplyHatchPatterns: failed to add '{name}': {ex2.Message}"); }
       }
-      TryLog($"ApplyHatchPatterns: added={added} skipped={skipped}");
+      Log.Write($"ApplyHatchPatterns: added={added} skipped={skipped}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyHatchPatterns failed: {ex.Message}");
+      Log.Write($"ApplyHatchPatterns failed: {ex.Message}");
     }
   }
 
@@ -745,19 +746,19 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         {
           // Update the existing style with the template's settings.
           try { doc.DimStyles.Modify(style, existing.Index, true); updated++; }
-          catch (Exception ex2) { TryLog($"ApplyDimStyles: failed to update '{name}': {ex2.Message}"); }
+          catch (Exception ex2) { Log.Write($"ApplyDimStyles: failed to update '{name}': {ex2.Message}"); }
         }
         else
         {
           try { doc.DimStyles.Add(style, false); added++; }
-          catch (Exception ex2) { TryLog($"ApplyDimStyles: failed to add '{name}': {ex2.Message}"); }
+          catch (Exception ex2) { Log.Write($"ApplyDimStyles: failed to add '{name}': {ex2.Message}"); }
         }
       }
-      TryLog($"ApplyDimStyles: added={added} updated={updated}");
+      Log.Write($"ApplyDimStyles: added={added} updated={updated}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyDimStyles failed: {ex.Message}");
+      Log.Write($"ApplyDimStyles failed: {ex.Message}");
     }
   }
 
@@ -783,13 +784,13 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         }
 
         try { doc.Materials.Add(material); added++; }
-        catch (Exception ex2) { TryLog($"ApplyMaterials: failed to add '{name}': {ex2.Message}"); }
+        catch (Exception ex2) { Log.Write($"ApplyMaterials: failed to add '{name}': {ex2.Message}"); }
       }
-      TryLog($"ApplyMaterials: added={added} skipped={skipped}");
+      Log.Write($"ApplyMaterials: added={added} skipped={skipped}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyMaterials failed: {ex.Message}");
+      Log.Write($"ApplyMaterials failed: {ex.Message}");
     }
   }
 
@@ -800,7 +801,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       var templateViews = templateFile.AllNamedViews;
       if (templateViews == null || templateViews.Count == 0)
       {
-        TryLog("ApplyNamedViews: no named views in template.");
+        Log.Write("ApplyNamedViews: no named views in template.");
         return;
       }
 
@@ -818,13 +819,13 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         }
 
         try { doc.NamedViews.Add(view); added++; }
-        catch (Exception ex2) { TryLog($"ApplyNamedViews: failed to add '{view.Name}': {ex2.Message}"); }
+        catch (Exception ex2) { Log.Write($"ApplyNamedViews: failed to add '{view.Name}': {ex2.Message}"); }
       }
-      TryLog($"ApplyNamedViews: added={added} skipped={skipped}");
+      Log.Write($"ApplyNamedViews: added={added} skipped={skipped}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyNamedViews failed: {ex.Message}");
+      Log.Write($"ApplyNamedViews failed: {ex.Message}");
     }
   }
 
@@ -835,7 +836,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       var namedCPlanes = templateFile.AllNamedConstructionPlanes;
       if (namedCPlanes == null || namedCPlanes.Count == 0)
       {
-        TryLog("ApplyNamedCPlanes: no named cplanes in template.");
+        Log.Write("ApplyNamedCPlanes: no named cplanes in template.");
         return;
       }
 
@@ -857,13 +858,13 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         if (exists) { skippedCp++; continue; }
 
         try { doc.NamedConstructionPlanes.Add(cp); addedCp++; }
-        catch (Exception ex2) { TryLog($"ApplyNamedCPlanes: failed to add '{cp.Name}': {ex2.Message}"); }
+        catch (Exception ex2) { Log.Write($"ApplyNamedCPlanes: failed to add '{cp.Name}': {ex2.Message}"); }
       }
-      TryLog($"ApplyNamedCPlanes: added={addedCp} skipped={skippedCp}");
+      Log.Write($"ApplyNamedCPlanes: added={addedCp} skipped={skippedCp}");
     }
     catch (Exception ex)
     {
-      TryLog($"ApplyNamedCPlanes failed: {ex.Message}");
+      Log.Write($"ApplyNamedCPlanes failed: {ex.Message}");
     }
   }
 
@@ -1064,10 +1065,10 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       {
         // snapshots[0] = before-apply state, snapshots[1] = after-apply state.
         RestoreDocSnapshot(e.Document, e.CreatedByRedo ? snapshots[1] : snapshots[0]);
-        TryLog($"OnDocSettingsUndoRedo: {(e.CreatedByRedo ? "redo" : "undo")} applied.");
+        Log.Write($"OnDocSettingsUndoRedo: {(e.CreatedByRedo ? "redo" : "undo")} applied.");
       }
     }
-    catch (Exception ex) { TryLog($"OnDocSettingsUndoRedo failed: {ex.Message}"); }
+    catch (Exception ex) { Log.Write($"OnDocSettingsUndoRedo failed: {ex.Message}"); }
   }
 
   // -----------------------------------------------------------------------
@@ -1111,54 +1112,6 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       _setDistanceDisplayMode?.Invoke(null, new object[] { doc.RuntimeSerialNumber, mode, usePageUnits });
     }
     catch { }
-  }
-
-  // -----------------------------------------------------------------------
-  // Logging
-  // -----------------------------------------------------------------------
-
-  internal static void TryLog(string message)
-  {
-    try
-    {
-      var logDir = ResolveProjectLogsDir();
-      if (string.IsNullOrWhiteSpace(logDir))
-        return;
-
-      Directory.CreateDirectory(logDir);
-      var path = Path.Combine(logDir, "vFileTypeTemplate.log");
-      File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
-    }
-    catch { }
-  }
-
-  private static string ResolveProjectLogsDir()
-  {
-    try
-    {
-      var asmDir = Path.GetDirectoryName(typeof(VFileTypeTemplatePlugIn).Assembly.Location) ?? ".";
-      var dir = new DirectoryInfo(asmDir);
-
-      while (dir != null)
-      {
-        if (File.Exists(Path.Combine(dir.FullName, "vFileTypeTemplate.csproj")))
-        {
-          var projectLogs = Path.Combine(dir.FullName, "logs");
-          Directory.CreateDirectory(projectLogs);
-          return projectLogs;
-        }
-
-        dir = dir.Parent;
-      }
-
-      var fallbackLogs = Path.Combine(asmDir, "logs");
-      Directory.CreateDirectory(fallbackLogs);
-      return fallbackLogs;
-    }
-    catch
-    {
-      return string.Empty;
-    }
   }
 }
 
@@ -1237,7 +1190,7 @@ public sealed class VFileTypeTemplateConfig
         config.Mappings.Add(new FileTypeMapping { Extension = ".dxf", TemplatePath = legacyPath });
         config.ExtraProperties = null;
         config.Save();
-        VFileTypeTemplatePlugIn.TryLog("Config migrated from legacy templatePath format to Mappings.");
+        Log.Write("Config migrated from legacy templatePath format to Mappings.");
       }
 
       return config;

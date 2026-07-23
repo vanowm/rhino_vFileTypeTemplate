@@ -1,4 +1,4 @@
-# vFileTypeTemplate  ·  v26.7.23.1753
+# vFileTypeTemplate  ·  v26.7.23.1808
 
 vFileTypeTemplate is a Rhino 8 and Rhino 9 plug-in that applies a chosen Rhino template automatically after a mapped file type is opened.
 
@@ -53,6 +53,8 @@ The Release plug-ins are:
 
 - `bin/Release/net7.0-windows/vFileTypeTemplate.dll` for Rhino 8
 - `bin/Release/net10.0-windows/vFileTypeTemplate.dll` for Rhino 9 Load it with Rhino's Plug-in Manager and keep `vFileTypeTemplate.config.json` beside the DLL when deploying predefined mappings.
+
+Runtime diagnostics are written to `vFileTypeTemplate.log` beside the loaded DLL. The file is cleared at startup and begins with the Rhino and plug-in versions.
 
 ## Versioning
 

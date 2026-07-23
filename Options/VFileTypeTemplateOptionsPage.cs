@@ -396,7 +396,7 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     }
 
     config.Save();
-    VFileTypeTemplatePlugIn.TryLog($"Options saved: Enabled={config.Enabled} Mappings={config.Mappings.Count}");
+    Log.Write($"Options saved: Enabled={config.Enabled} Mappings={config.Mappings.Count}");
   }
 
   // ---- Button handlers ----
@@ -591,7 +591,7 @@ internal sealed class GridView : DataGridView
     base.WndProc(ref m);
     if (m.Msg == WM_GETDLGCODE)
     {
-      VFileTypeTemplatePlugIn.TryLog($"[GridView] WM_GETDLGCODE base={m.Result} → adding DLGC_WANTALLKEYS");
+      Log.Write($"[GridView] WM_GETDLGCODE base={m.Result} → adding DLGC_WANTALLKEYS");
       m.Result = (IntPtr)(m.Result.ToInt32() | DLGC_WANTALLKEYS);
     }
   }
@@ -695,7 +695,7 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
 
     if (m.Msg == WM_KEYDOWN && (int)m.WParam == VK_TAB)
     {
-      VFileTypeTemplatePlugIn.TryLog("[EditCtrl] Tab → NavigateCell");
+      Log.Write("[EditCtrl] Tab → NavigateCell");
       if (EditingControlDataGridView is GridView gv)
         gv.NavigateCell((Control.ModifierKeys & Keys.Shift) != 0);
       m.Result = IntPtr.Zero;
@@ -719,7 +719,7 @@ internal sealed class GridTextBoxEditingControl : DataGridViewTextBoxEditingCont
 
     if (m.Msg == WM_GETDLGCODE)
     {
-      VFileTypeTemplatePlugIn.TryLog($"[EditCtrl] WM_GETDLGCODE base={m.Result} → adding DLGC_WANTALLKEYS");
+      Log.Write($"[EditCtrl] WM_GETDLGCODE base={m.Result} → adding DLGC_WANTALLKEYS");
       m.Result = (IntPtr)(m.Result.ToInt32() | DLGC_WANTALLKEYS);
     }
   }
@@ -786,7 +786,7 @@ internal sealed class KeyboardHook : IDisposable
     _grid = grid;
     _proc = Callback;
     _hook = SetWindowsHookEx(WH_GETMESSAGE, _proc, IntPtr.Zero, GetCurrentThreadId());
-    VFileTypeTemplatePlugIn.TryLog($"[Hook] installed handle=0x{_hook:X}");
+    Log.Write($"[Hook] installed handle=0x{_hook:X}");
   }
 
   private IntPtr Callback(int code, IntPtr wParam, IntPtr lParam)
@@ -806,7 +806,7 @@ internal sealed class KeyboardHook : IDisposable
           if (_grid.IsHandleCreated)
             _grid.BeginInvoke((Action)(() =>
             {
-              VFileTypeTemplatePlugIn.TryLog($"[Hook] dispatch vk=0x{capturedVk:X2}");
+              Log.Write($"[Hook] dispatch vk=0x{capturedVk:X2}");
               if (capturedVk == VK_RETURN) _grid.CommitAndExit();
               else                         _grid.CancelAndExit();
             }));
@@ -821,7 +821,7 @@ internal sealed class KeyboardHook : IDisposable
     if (_hook != IntPtr.Zero)
     {
       UnhookWindowsHookEx(_hook);
-      VFileTypeTemplatePlugIn.TryLog("[Hook] uninstalled");
+      Log.Write("[Hook] uninstalled");
       _hook = IntPtr.Zero;
     }
   }
