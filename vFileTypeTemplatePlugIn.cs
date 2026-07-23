@@ -253,7 +253,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       // Binary DXF starts with "AutoCAD Binary DXF" — not parseable as text.
       var sig = new byte[18];
       using (var fs = File.OpenRead(sourceFilePath))
-        fs.Read(sig, 0, sig.Length);
+        fs.ReadExactly(sig);
       if (System.Text.Encoding.ASCII.GetString(sig).StartsWith("AutoCAD Binary DXF"))
       {
         TryLog("ReadDxfInsUnits: binary DXF — $INSUNITS not parsed, template units apply.");

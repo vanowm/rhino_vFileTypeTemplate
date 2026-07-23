@@ -150,11 +150,12 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
         e.CellStyle.SelectionForeColor = SystemColors.ControlText;
       }
 
+      var templatePathColumn = _grid.Columns["TemplatePath"];
       bool isCellEditing = _grid.IsCurrentCellInEditMode &&
                            _grid.CurrentCell?.RowIndex == e.RowIndex &&
                            _grid.CurrentCell?.ColumnIndex == e.ColumnIndex;
 
-      if (e.ColumnIndex == _grid.Columns["TemplatePath"].Index)
+      if (templatePathColumn != null && e.ColumnIndex == templatePathColumn.Index)
       {
         // Only show <Default> / shorten when NOT in edit mode for this cell.
         var val = e.Value?.ToString() ?? string.Empty;
@@ -210,7 +211,8 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       if (e.Control is not GridTextBoxEditingControl tb) return;
       tb.Leave -= CommitOnEditingControlLeave;
       tb.Leave += CommitOnEditingControlLeave;
-      if (_grid.CurrentCell?.ColumnIndex == _grid.Columns["TemplatePath"].Index)
+      var templatePathColumn = _grid.Columns["TemplatePath"];
+      if (templatePathColumn != null && _grid.CurrentCell?.ColumnIndex == templatePathColumn.Index)
       {
         tb.SetCueBanner("<Default>");
         // Show shortened value so the user edits the bare name, not the full path.
@@ -490,9 +492,11 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
     // If the TemplatePath cell of this row is currently open in the editing control,
     // update the text there directly so the change is visible without flickering.
+    var templatePathColumn = _grid.Columns["TemplatePath"];
     bool tplCellEditing = _grid.IsCurrentCellInEditMode &&
+                          templatePathColumn != null &&
                           _grid.CurrentCell?.RowIndex == row.Index &&
-                          _grid.CurrentCell?.ColumnIndex == _grid.Columns["TemplatePath"].Index;
+                          _grid.CurrentCell?.ColumnIndex == templatePathColumn.Index;
     if (tplCellEditing && _grid.EditingControl is TextBox editTb)
     {
       editTb.Text = shortPath;
