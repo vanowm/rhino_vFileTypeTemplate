@@ -19,6 +19,8 @@ vFileTypeTemplate is a Rhino 8 and Rhino 9 plug-in that applies a chosen Rhino t
 
 The configuration page is also available under Rhino's **Tools > Options > File Type Template**.
 
+![Rhino Options showing the File Type Template mapping editor](docs/images/file-type-template-options.png)
+
 ## Configuration
 
 `vFileTypeTemplate.config.json` is stored beside the plug-in DLL. The repository includes these defaults:
