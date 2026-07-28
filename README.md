@@ -37,6 +37,8 @@ The configuration page is also available under Rhino's **Tools > Options > File 
 
 An empty template path uses Rhino's default template. A bare template filename is resolved in Rhino's template folder, while an absolute path can point elsewhere. Missing configured templates are skipped without changing the opened document. Multiple comma-separated extensions can share one mapping in the configuration UI.
 
+During every build, missing default properties are merged into the existing config in each framework output. Existing values and configured entries are never replaced.
+
 ## Build
 
 From the repository folder:
@@ -52,7 +54,9 @@ The default Release build does not require Git and never commits or pushes. Main
 The Release plug-ins are:
 
 - `bin/Release/net7.0-windows/vFileTypeTemplate.dll` for Rhino 8
-- `bin/Release/net10.0-windows/vFileTypeTemplate.dll` for Rhino 9 Load it with Rhino's Plug-in Manager and keep `vFileTypeTemplate.config.json` beside the DLL when deploying predefined mappings.
+- `bin/Release/net10.0-windows/vFileTypeTemplate.dll` for Rhino 9
+
+Load it with Rhino's Plug-in Manager and keep `vFileTypeTemplate.config.json` beside the DLL when deploying predefined mappings.
 
 Runtime diagnostics are written to `vFileTypeTemplate.log` beside the loaded DLL. The file is cleared at startup and begins with the Rhino and plug-in versions.
 

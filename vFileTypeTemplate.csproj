@@ -28,10 +28,15 @@
 
   <ItemGroup>
     <Content Include="vFileTypeTemplate.config.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
 
+  <Target Name="MergeRuntimeConfigDefaults" BeforeTargets="Build" Condition="'$(TargetFramework)' != ''">
+    <Exec
+      Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\MergeConfigDefaults.ps1&quot; -SourcePath &quot;$(MSBuildProjectDirectory)\vFileTypeTemplate.config.json&quot; -DestinationPath &quot;$(TargetDir)vFileTypeTemplate.config.json&quot;" />
+  </Target>
   <Target Name="ValidateRhinoReferences" BeforeTargets="ResolveReferences" Condition="'$(TargetFramework)' != '' and !Exists('$(RhinoSystemDirectory)\RhinoCommon.dll')">
     <Error Text="$(TargetFramework) requires its matching Rhino installation; RhinoCommon.dll was not found under '$(RhinoSystemDirectory)'." />
   </Target>

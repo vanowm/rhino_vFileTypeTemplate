@@ -13,4 +13,5 @@
 - Build versions shown in a README must be updated automatically by a successful Release build. Command versions in README command lists are introduction versions and must not change when commands are updated.
 - Commit messages describe plug-in behavior and build changes; do not mention source script filenames.
 - Keep paths relocatable. Do not embed machine-specific absolute paths in the plug-in or its runtime files.
+- Deploy repository JSON defaults through `MergeConfigDefaults.ps1` for every target framework; add missing properties recursively without overwriting existing runtime values.
 - Undo/Redo command behavior should be implemented as hidden features. Do not show Undo or Redo as visible command-line options, and do not list them in visible command option sections.
