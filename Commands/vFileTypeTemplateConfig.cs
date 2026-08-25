@@ -2,6 +2,7 @@
 using Rhino.Commands;
 using Rhino.Input;
 using Rhino.Input.Custom;
+using Rhino.UI;
 using System.IO;
 using System.Linq;
 
@@ -224,7 +225,7 @@ public sealed class vFileTypeTemplateConfig : Command
 }
 
 /// <summary>
-/// Applies the configured template for the current document's file type on demand.
+/// Applies a specified, mapped, or default template to the current document on demand.
 /// </summary>
 public sealed class vFileTypeTemplateApply : Command
 {
@@ -233,29 +234,104 @@ public sealed class vFileTypeTemplateApply : Command
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     var config = VFileTypeTemplateConfig.Load();
-
-    if (!config.Enabled)
-    {
-      RhinoApp.WriteLine("vFileTypeTemplate is disabled. Enable it first with vFileTypeTemplateConfig.");
-      return Result.Cancel;
-    }
-
     var ext = Path.GetExtension(doc.Path ?? string.Empty);
     string? configuredPath = string.IsNullOrEmpty(ext) ? null : config.FindTemplatePath(ext);
 
     if (configuredPath == null && config.Mappings.Count > 0)
       configuredPath = config.Mappings[0].TemplatePath;
 
-    var templatePath = VFileTypeTemplatePlugIn.ResolveTemplatePath(configuredPath ?? string.Empty);
+    var defaultTemplatePath = VFileTypeTemplatePlugIn.ResolveTemplatePath(configuredPath ?? string.Empty);
+    var requestedPath = PromptTemplateFile(defaultTemplatePath);
+    if (requestedPath == null)
+      return Result.Cancel;
+
+    var templatePath = VFileTypeTemplatePlugIn.ResolveTemplatePath(requestedPath);
     if (string.IsNullOrEmpty(templatePath))
     {
-      RhinoApp.WriteLine("vFileTypeTemplate: no template resolved. Configure mappings with vFileTypeTemplateConfig.");
+      RhinoApp.WriteLine("vFileTypeTemplate: no valid template resolved. Enter or browse to an existing .3dm file.");
       return Result.Cancel;
     }
 
+    if (!Path.GetExtension(templatePath).Equals(".3dm", System.StringComparison.OrdinalIgnoreCase))
+    {
+      RhinoApp.WriteLine($"vFileTypeTemplate: template must be a .3dm file: {templatePath}");
+      return Result.Cancel;
+    }
+
+    Log.Write($"Manual apply requested with template '{templatePath}' for '{doc.Path}'.");
     VFileTypeTemplatePlugIn.ApplyTemplate(doc, templatePath, doc.Path ?? string.Empty);
     RhinoApp.WriteLine($"vFileTypeTemplate: template applied from '{templatePath}'.");
     return Result.Success;
+  }
+
+  private static string? PromptTemplateFile(string defaultTemplatePath)
+  {
+    var gs = new GetString();
+    gs.SetCommandPrompt("Template .3dm file to apply");
+    gs.AcceptNothing(true);
+    if (!string.IsNullOrEmpty(defaultTemplatePath))
+      gs.SetDefaultString(GetCommandLineTemplateName(defaultTemplatePath));
+    var browseOptionIndex = gs.AddOption("Browse");
+
+    while (true)
+    {
+      var result = gs.Get();
+      if (result == GetResult.Cancel)
+        return null;
+      if (result == GetResult.Nothing)
+        return defaultTemplatePath;
+      if (result == GetResult.String)
+      {
+        var enteredPath = (gs.StringResult() ?? string.Empty).Trim().Trim('"');
+        return string.IsNullOrWhiteSpace(enteredPath) ? defaultTemplatePath : enteredPath;
+      }
+      if (result == GetResult.Option && gs.OptionIndex() == browseOptionIndex)
+      {
+        if (TryChooseTemplateFile(defaultTemplatePath, out var selectedPath))
+          return selectedPath;
+        continue;
+      }
+      return null;
+    }
+  }
+
+  private static string GetCommandLineTemplateName(string templatePath)
+  {
+    if (VFileTypeTemplatePlugIn.IsInDefaultTemplateFolder(templatePath))
+      return Path.GetFileNameWithoutExtension(templatePath);
+
+    return templatePath;
+  }
+
+  private static bool TryChooseTemplateFile(string currentPath, out string templatePath)
+  {
+    templatePath = string.Empty;
+    var dialog = new OpenFileDialog
+    {
+      Title = "Select Rhino template",
+      Filter = "Rhino 3D models (*.3dm)|*.3dm|All files (*.*)|*.*",
+      DefaultExt = "3dm",
+      MultiSelect = false
+    };
+
+    if (!string.IsNullOrWhiteSpace(currentPath))
+    {
+      try
+      {
+        var fullPath = Path.GetFullPath(currentPath);
+        dialog.FileName = fullPath;
+        dialog.InitialDirectory = Path.GetDirectoryName(fullPath) ?? string.Empty;
+      }
+      catch
+      {
+      }
+    }
+
+    if (!dialog.ShowOpenDialog() || string.IsNullOrWhiteSpace(dialog.FileName))
+      return false;
+
+    templatePath = Path.GetFullPath(dialog.FileName);
+    return true;
   }
 }
 

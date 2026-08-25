@@ -115,16 +115,24 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
   {
     if (!string.IsNullOrWhiteSpace(configuredPath))
     {
+      configuredPath = configuredPath.Trim().Trim('"');
       if (File.Exists(configuredPath))
         return configuredPath;
+
+      // A .3dm extension is optional for both absolute and relative paths.
+      if (string.IsNullOrEmpty(Path.GetExtension(configuredPath)))
+      {
+        var pathWithExtension = configuredPath + ".3dm";
+        if (File.Exists(pathWithExtension))
+          return pathWithExtension;
+      }
 
       // Bare filename? Try resolving within the Rhino template directory.
       if (!Path.IsPathRooted(configuredPath))
       {
         try
         {
-          var tplDir = Path.GetDirectoryName(Rhino.ApplicationSettings.FileSettings.TemplateFile);
-          if (!string.IsNullOrEmpty(tplDir))
+          foreach (var tplDir in GetDefaultTemplateFolders())
           {
             var candidate = Path.Combine(tplDir, configuredPath);
             if (File.Exists(candidate)) return candidate;
@@ -154,6 +162,91 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
     catch { }
 
     return string.Empty;
+  }
+
+  internal static IReadOnlyList<string> GetDefaultTemplateFolders()
+  {
+    var folders = new List<string>();
+
+    void AddFolder(string? folder)
+    {
+      if (string.IsNullOrWhiteSpace(folder)) return;
+
+      try
+      {
+        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        if (!folders.Contains(fullPath, StringComparer.OrdinalIgnoreCase))
+          folders.Add(fullPath);
+      }
+      catch
+      {
+      }
+    }
+
+    try
+    {
+      AddFolder(Rhino.ApplicationSettings.FileSettings.TemplateFolder);
+    }
+    catch
+    {
+    }
+
+    try
+    {
+      var languageId = Rhino.ApplicationSettings.AppearanceSettings.LanguageIdentifier;
+      var localeName = System.Globalization.CultureInfo.GetCultureInfo(languageId).Name;
+      AddFolder(Path.Combine(
+        System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
+        "McNeel",
+        "Rhinoceros",
+        $"{RhinoApp.ExeVersion}.0",
+        "Localization",
+        localeName,
+        "Template Files"));
+    }
+    catch
+    {
+    }
+
+    return folders;
+  }
+
+  internal static bool IsInDefaultTemplateFolder(string templatePath)
+  {
+    try
+    {
+      var templateDirectory = Path.GetDirectoryName(Path.GetFullPath(templatePath));
+      if (string.IsNullOrWhiteSpace(templateDirectory)) return false;
+
+      var normalizedDirectory = Path.TrimEndingDirectorySeparator(templateDirectory);
+      if (GetDefaultTemplateFolders().Any(folder =>
+            string.Equals(normalizedDirectory, folder, StringComparison.OrdinalIgnoreCase)))
+      {
+        return true;
+      }
+
+      // Recognize Rhino's localized user-template layout even when the runtime
+      // settings API reports its parent Localization directory.
+      var roamingData = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData);
+      var localizationRoot = Path.Combine(
+        roamingData,
+        "McNeel",
+        "Rhinoceros",
+        $"{RhinoApp.ExeVersion}.0",
+        "Localization");
+      var relativePath = Path.GetRelativePath(localizationRoot, normalizedDirectory);
+      var segments = relativePath.Split(
+        new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+        StringSplitOptions.RemoveEmptyEntries);
+
+      return segments.Length == 2 &&
+             !segments[0].Equals("..", StringComparison.Ordinal) &&
+             segments[1].Equals("Template Files", StringComparison.OrdinalIgnoreCase);
+    }
+    catch
+    {
+      return false;
+    }
   }
 
   // -----------------------------------------------------------------------

@@ -1,4 +1,4 @@
-# vFileTypeTemplate  ·  v26.8.25.933
+# vFileTypeTemplate  ·  v26.8.25.1811
 
 vFileTypeTemplate is a Rhino 8 and Rhino 9 plug-in that applies a chosen Rhino template automatically after a mapped file type is opened.
 
@@ -15,9 +15,15 @@ vFileTypeTemplate is a Rhino 8 and Rhino 9 plug-in that applies a chosen Rhino t
 | Command | Purpose |
 | --- | --- |
 | `vFileTypeTemplateConfig` | Open the mapping editor and enable or disable automatic application. |
-| `vFileTypeTemplateApply` | Apply the template mapped to the active document's file type. |
+| `vFileTypeTemplateApply` | Apply a specified template, or use the template mapped to the active document's file type. |
 
 The configuration page is also available under Rhino's **Tools > Options > File Type Template**.
+
+Run `vFileTypeTemplateApply` and enter a template path, choose **Browse**, or press Enter to use the mapped/default template. The `.3dm` extension is optional. Templates in Rhino's default template folder are shown and accepted by name without their folder or extension. The command remains available when automatic application is disabled. For scripted use:
+
+```text
+_-vFileTypeTemplateApply "<template-name-or-path>"
+```
 
 ![Rhino Options showing the File Type Template mapping editor](docs/images/file-type-template-options.png)
 

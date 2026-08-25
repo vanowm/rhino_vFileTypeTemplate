@@ -15,6 +15,36 @@ if (-not $projectFile) {
 $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectFile.Name)
 $gitDirectory = Join-Path $PSScriptRoot '.git'
 $pendingFile = Join-Path $PSScriptRoot '.git\release-pending-message.txt'
+$releaseDllPaths = @(
+    "bin\Release\net7.0-windows\$projectName.dll",
+    "bin\Release\net10.0-windows\$projectName.dll"
+)
+
+function Test-FileLocked {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None)
+        return $false
+    } catch [System.IO.IOException] {
+        return $true
+    } catch [System.UnauthorizedAccessException] {
+        return $true
+    } finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
 
 if (-not $Publish -and -not $ComposeOnly -and -not [string]::IsNullOrWhiteSpace($Message)) {
     Write-Error 'The -Message option is only valid with -Publish or -ComposeOnly.'
@@ -39,7 +69,7 @@ if ($Publish -or $ComposeOnly) {
         Write-Error 'A semantic release message is required. Supply it with -Message.'
         exit 1
     } else {
-        $promptedMessage = Read-Host 'Describe plug-in behavior and build changes since the last commit'
+        $promptedMessage = Read-Host 'Describe net plug-in and build changes relative to HEAD; omit intermediate changes that were later reverted'
         $summary = if ($null -eq $promptedMessage) { '' } else { $promptedMessage.Trim() }
         $messageWasPrompted = $true
     }
@@ -64,6 +94,72 @@ if ($Publish -or $ComposeOnly) {
     if ($ComposeOnly) { exit 0 }
 }
 
+$sourceFiles = Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File -Filter '*.cs' |
+    Where-Object {
+        $_.FullName -notmatch '\\(bin|obj|logs|backups|\.git)\\' -and
+        $_.Name -notlike '*.Generated*'
+    }
+$latestSource = $sourceFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+$expectedVersion = if ($latestSource) {
+    $latestSource.LastWriteTime.ToString('yy.M.d.Hmm')
+} else {
+    [DateTime]::Now.ToString('yy.M.d.Hmm')
+}
+$releaseOutputsCurrent = $null -ne $latestSource
+
+foreach ($relativePath in $releaseDllPaths) {
+    $dllPath = Join-Path $PSScriptRoot $relativePath
+    if (-not (Test-Path -LiteralPath $dllPath -PathType Leaf)) {
+        $releaseOutputsCurrent = $false
+        break
+    }
+
+    $dll = Get-Item -LiteralPath $dllPath
+    $dllVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll.FullName).FileVersion
+    if ($dllVersion -ne $expectedVersion -or $dll.LastWriteTimeUtc -lt $latestSource.LastWriteTimeUtc) {
+        $releaseOutputsCurrent = $false
+        break
+    }
+}
+
+if ($releaseOutputsCurrent) {
+    if ($Publish) {
+        Write-Host "$projectName Release DLLs already match source version $expectedVersion; skipping compilation." -ForegroundColor Green
+        Write-Host 'Continuing publish commit flow with the existing Release outputs.' -ForegroundColor Green
+        $publishArguments = @(
+            'msbuild',
+            $projectFile.FullName,
+            '-t:CommitReleaseVersion',
+            '-p:Configuration=Release',
+            "-p:BuildVersion=$expectedVersion",
+            "-p:Version=$expectedVersion"
+        )
+        & dotnet @publishArguments
+        exit $LASTEXITCODE
+    }
+
+    Write-Host "$projectName Release DLLs already match source version $expectedVersion; skipping compilation." -ForegroundColor Green
+    exit 0
+}
+
+$lockedReleaseDlls = @(
+    foreach ($relativePath in $releaseDllPaths) {
+        $dllPath = Join-Path $PSScriptRoot $relativePath
+        if (Test-FileLocked -Path $dllPath) {
+            $dllPath
+        }
+    }
+)
+
+if ($lockedReleaseDlls.Count -gt 0) {
+    Write-Host 'WARNING: Release build skipped because the following DLL is locked:' -ForegroundColor Yellow
+    $lockedReleaseDlls | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+    if ($Publish) {
+        Write-Host 'The pending message remains for the next build.' -ForegroundColor Yellow
+    }
+    exit 0
+}
+
 $buildArguments = @('build', $projectFile.FullName, '-c', 'Release', '--no-incremental')
 if (-not $Publish) {
     $buildArguments += '-p:AutoCommitVersionOnRelease=false'
@@ -74,12 +170,21 @@ $buildExitCode = $LASTEXITCODE
 $buildOutput | ForEach-Object { Write-Host $_ }
 
 if ($buildExitCode -ne 0) {
-    $text = $buildOutput -join [Environment]::NewLine
-    if ($text -match 'being used by another process' -or
-        $text -match 'cannot access the file' -or
-        $text -match 'Cannot write file') {
-        $pendingNote = if ($Publish) { '; the pending message remains for the next build' } else { '' }
-        Write-Host "WARNING: $projectName release DLL is locked$pendingNote." -ForegroundColor Yellow
+    $lockedAfterBuild = @(
+        foreach ($relativePath in $releaseDllPaths) {
+            $dllPath = Join-Path $PSScriptRoot $relativePath
+            if (Test-FileLocked -Path $dllPath) {
+                $dllPath
+            }
+        }
+    )
+
+    if ($lockedAfterBuild.Count -gt 0) {
+        Write-Host 'WARNING: Release build failed because the following DLL became locked:' -ForegroundColor Yellow
+        $lockedAfterBuild | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        if ($Publish) {
+            Write-Host 'The pending message remains for the next build.' -ForegroundColor Yellow
+        }
         exit 0
     }
     exit $buildExitCode
