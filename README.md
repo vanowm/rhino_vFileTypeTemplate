@@ -1,4 +1,4 @@
-# vFileTypeTemplate  ·  v26.7.23.1808
+# vFileTypeTemplate  ·  v26.8.25.933
 
 vFileTypeTemplate is a Rhino 8 and Rhino 9 plug-in that applies a chosen Rhino template automatically after a mapped file type is opened.
 
