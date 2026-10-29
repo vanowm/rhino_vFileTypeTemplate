@@ -1,5 +1,6 @@
 param(
     [switch]$Publish,
+    [switch]$Rebuild,
     [switch]$ComposeOnly,
     [string]$Message
 )
@@ -16,8 +17,9 @@ $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectFile.Name)
 $gitDirectory = Join-Path $PSScriptRoot '.git'
 $pendingFile = Join-Path $PSScriptRoot '.git\release-pending-message.txt'
 $releaseDllPaths = @(
-    "bin\Release\net7.0-windows\$projectName.dll",
-    "bin\Release\net10.0-windows\$projectName.dll"
+    "bin\Release\Rhino8\net7.0-windows\$projectName.dll",
+    "bin\Release\Rhino9\net10.0-windows\$projectName.dll",
+    "bin\Release\Rhino8\net10.0-windows\$projectName.dll"
 )
 
 function Test-FileLocked {
@@ -122,7 +124,9 @@ foreach ($relativePath in $releaseDllPaths) {
     }
 }
 
-if ($releaseOutputsCurrent) {
+if ($releaseOutputsCurrent -and -not $Rebuild) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Register.ps1')
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($Publish) {
         Write-Host "$projectName Release DLLs already match source version $expectedVersion; skipping compilation." -ForegroundColor Green
         Write-Host 'Continuing publish commit flow with the existing Release outputs.' -ForegroundColor Green
@@ -131,6 +135,7 @@ if ($releaseOutputsCurrent) {
             $projectFile.FullName,
             '-t:CommitReleaseVersion',
             '-p:Configuration=Release',
+            '-p:SkipHostVariantBuild=true',
             "-p:BuildVersion=$expectedVersion",
             "-p:Version=$expectedVersion"
         )

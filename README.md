@@ -1,4 +1,4 @@
-# vFileTypeTemplate  ·  v26.8.25.1811
+# vFileTypeTemplate  ·  v26.8.25.1813
 
 vFileTypeTemplate is a Rhino 8 and Rhino 9 plug-in that applies a chosen Rhino template automatically after a mapped file type is opened.
 
@@ -61,8 +61,8 @@ The default Release build does not require Git and never commits or pushes. Main
 
 The Release plug-ins are:
 
-- `bin/Release/net7.0-windows/vFileTypeTemplate.dll` for Rhino 8
-- `bin/Release/net10.0-windows/vFileTypeTemplate.dll` for Rhino 9
+- `bin/Release/Rhino8/net7.0-windows/vFileTypeTemplate.dll` for Rhino 8
+- `bin/Release/Rhino9/net10.0-windows/vFileTypeTemplate.dll` for Rhino 9
 
 Load it with Rhino's Plug-in Manager and keep `vFileTypeTemplate.config.json` beside the DLL when deploying predefined mappings.
 
@@ -75,3 +75,11 @@ Build versions use `yy.m.d.hmm`, derived from the newest C# source file rather t
 ## License
 
 Released under the [MIT License](LICENSE).
+
+## Host-Isolated Installation
+
+The installed DLLs, settings, logs and companion files live directly in bin/Release/Rhino8/net7.0-windows, bin/Release/Rhino8/net10.0-windows and bin/Release/Rhino9/net10.0-windows. Rhino 8 variants reference the Rhino 8 SDK; Rhino 9 references Rhino 9. There is no separate deployment directory or post-build copying step. Debug outputs and compiler caches remain separate by host/runtime.
+
+For existing installations, Register.ps1 -Register validates all three DLLs, restores the per-user startup registration request, and updates plug-in/toolbar paths silently. Use -IncludeMachine as an administrator to repair existing machine-wide entries too. Previous values are backed up under backups/registration. Run registration from ordinary Windows PowerShell or from Rhino, not a Codex Windows sandbox: its registry view can differ from Rhino, so sandbox writes are refused. Confirm discovery after a normal Rhino restart; an in-process test does not verify desktop startup. Subsequent builds update the same registered files. Existing configuration values are preserved while missing defaults are added; existing toolbars are never overwritten. Close Rhino before updating a locked Release DLL, run build.ps1 once, then reopen Rhino. Use Debug for verification while Release is in use. The global material database and Rhino-native settings remain in their existing stores.
+
+build.ps1 is a standalone Release build without Git operations; -Rebuild forces compilation when C#-derived versions are unchanged. Publishing current Release outputs runs metadata-only targets without recompiling loaded runtime variants. When compilation is required and an output is locked, the build exits successfully with a warning and preserves the pending message. Publishing remains an explicit user action. GitHub version-tag workflows validate three prebuilt DLLs and package separate Rhino 8/9 ZIPs with repository defaults, help, toolbars and notices. They never ship installed profiles or logs, and retries add only missing assets without overwriting published files.
