@@ -5,15 +5,112 @@ param(
     [string]$Message
 )
 
+function Test-ExplorerBuildLaunch {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [string[]]$LaunchArguments = [Environment]::GetCommandLineArgs(),
+        [bool]$Interactive = (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected)
+    )
+
+    if (-not $Interactive -or $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS) {
+        return $false
+    }
+    if ($LaunchArguments | Where-Object { $_ -match '^[-/](?:noe(?:xit)?|noni(?:nteractive)?)$' }) {
+        return $false
+    }
+
+    $scriptLaunch = $false
+    for ($index = 1; $index -lt $LaunchArguments.Count; $index++) {
+        if ([string]::Equals($LaunchArguments[$index], $ScriptPath, [StringComparison]::OrdinalIgnoreCase)) {
+            $scriptLaunch = $true
+            break
+        }
+        if ($LaunchArguments[$index] -match '^[-/](?:f|fi|fil|file)$' -and $index + 1 -lt $LaunchArguments.Count) {
+            $scriptLaunch = [string]::Equals($LaunchArguments[$index + 1], $ScriptPath, [StringComparison]::OrdinalIgnoreCase)
+            break
+        }
+        if ($LaunchArguments[$index] -match '^[-/](?:c|co|com|comm|comma|comman|command)$') {
+            $command = $LaunchArguments[($index + 1)..($LaunchArguments.Count - 1)] -join ' '
+            $tokens = $null; $parseErrors = $null
+            $ast = [Management.Automation.Language.Parser]::ParseInput($command, [ref]$tokens, [ref]$parseErrors)
+            $scriptLaunch = $null -ne $ast.Find({
+                param($node)
+                $node -is [Management.Automation.Language.CommandAst] -and
+                    [string]::Equals($node.GetCommandName(), $ScriptPath, [StringComparison]::OrdinalIgnoreCase)
+            }, $true)
+            break
+        }
+    }
+    if (-not $scriptLaunch) { return $false }
+
+    try {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop
+        # Only follow transient launch intermediaries, never an existing PowerShell session.
+        for ($depth = 0; $depth -lt 4 -and $process.ParentProcessId; $depth++) {
+            $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $process.ParentProcessId) -ErrorAction Stop
+            if ($process.Name -ieq 'explorer.exe') { return $true }
+            if ($process.Name -ieq 'cmd.exe' -and $process.CommandLine -match '(?:^|\s)/c(?:\s|$)') { continue }
+            if ($process.Name -in @('WindowsTerminal.exe', 'OpenConsole.exe', 'conhost.exe')) { continue }
+            return $false
+        }
+    } catch {
+        return $false
+    }
+    return $false
+}
+
+function Test-BuildOutputIssue {
+    param([object]$Value)
+    if ($Value -is [Management.Automation.WarningRecord] -or $Value -is [Management.Automation.ErrorRecord]) { return $true }
+    $text = [regex]::Replace([string]$Value, '\x1B\[[0-?]*[ -/]*[@-~]', '').Trim()
+    if ($text -match '^(?:0 Warning\(s\)|0 Error\(s\))$') { return $false }
+    return $text -match '(?i)(?:^|\s)(?:warning|error)(?:\s+[A-Z]+\d+)?\s*:|^[1-9]\d*\s+(?:warning|error)\(s\)|^build\s+failed\b|^Write-Error\b'
+}
+
+function Test-PauseBuildWindow {
+    param([bool]$Explorer, [bool]$Completed, [bool]$HadIssues)
+    return $Explorer -and (-not $Completed -or $HadIssues)
+}
+
+function Update-InstalledToolbar {
+    $sync = Join-Path $PSScriptRoot 'Toolbar\SyncToolbarIcons.ps1'
+    if (-not (Test-Path -LiteralPath $sync -PathType Leaf)) { return }
+    try {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $sync -CheckOnly 2>&1 | ForEach-Object {
+            if (Test-BuildOutputIssue $_) { $script:buildHadIssues = $true }
+            Write-Host $_
+        }
+        $checkExitCode = $LASTEXITCODE
+        if ($checkExitCode -eq 0) { Write-Host 'Installed toolbar buttons and icons are current.'; return }
+        if ($checkExitCode -ne 2) { throw 'Could not check installed toolbar contents.' }
+        Write-Host 'Synchronizing changed toolbar buttons and icons...' -ForegroundColor Cyan
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $sync 2>&1 | ForEach-Object {
+            if (Test-BuildOutputIssue $_) { $script:buildHadIssues = $true }
+            Write-Host $_
+        }
+        if ($LASTEXITCODE -ne 0) { throw 'Close Rhino and run build.ps1 again to finish the toolbar update.' }
+    } catch {
+        $script:buildHadIssues = $true
+        Write-Warning "Toolbar synchronization failed: $($_.Exception.Message)"
+    }
+}
+
+$script:buildHadIssues = $false
+$script:buildCompletedCleanly = $false
+
+$pauseForExplorer = -not $ComposeOnly -and (Test-ExplorerBuildLaunch -ScriptPath $PSCommandPath)
+# Finally also covers current-output skips, locked DLLs, and nonzero build exits.
+try {
 Set-Location $PSScriptRoot
 
 $projectFile = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.csproj' -File | Select-Object -First 1
 if (-not $projectFile) {
-    Write-Error "No project file found in $PSScriptRoot."
-    exit 1
+    $script:buildHadIssues = $true; Write-Error "No project file found in $PSScriptRoot."
+    $script:buildHadIssues = $true; exit 1
 }
 
 $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectFile.Name)
+Write-Host "${projectName}: preparing Release build..." -ForegroundColor Cyan
 $gitDirectory = Join-Path $PSScriptRoot '.git'
 $pendingFile = Join-Path $PSScriptRoot '.git\release-pending-message.txt'
 $releaseDllPaths = @(
@@ -49,14 +146,14 @@ function Test-FileLocked {
 }
 
 if (-not $Publish -and -not $ComposeOnly -and -not [string]::IsNullOrWhiteSpace($Message)) {
-    Write-Error 'The -Message option is only valid with -Publish or -ComposeOnly.'
-    exit 1
+    $script:buildHadIssues = $true; Write-Error 'The -Message option is only valid with -Publish or -ComposeOnly.'
+    $script:buildHadIssues = $true; exit 1
 }
 
 if ($Publish -or $ComposeOnly) {
     if (-not (Test-Path -LiteralPath $gitDirectory -PathType Container)) {
-        Write-Error 'Publishing requires a Git working copy. Run build.ps1 without -Publish for a standalone build.'
-        exit 1
+        $script:buildHadIssues = $true; Write-Error 'Publishing requires a Git working copy. Run build.ps1 without -Publish for a standalone build.'
+        $script:buildHadIssues = $true; exit 1
     }
 
     $messageWasSupplied = -not [string]::IsNullOrWhiteSpace($Message)
@@ -68,8 +165,8 @@ if ($Publish -or $ComposeOnly) {
         $summary = [System.IO.File]::ReadAllText($pendingFile).Trim()
         Write-Host "Using existing semantic pending message: $summary" -ForegroundColor Green
     } elseif ($ComposeOnly) {
-        Write-Error 'A semantic release message is required. Supply it with -Message.'
-        exit 1
+        $script:buildHadIssues = $true; Write-Error 'A semantic release message is required. Supply it with -Message.'
+        $script:buildHadIssues = $true; exit 1
     } else {
         $promptedMessage = Read-Host 'Describe net plug-in and build changes relative to HEAD; omit intermediate changes that were later reverted'
         $summary = if ($null -eq $promptedMessage) { '' } else { $promptedMessage.Trim() }
@@ -78,13 +175,13 @@ if ($Publish -or $ComposeOnly) {
 
     $genericPart = '(?i)(^|;\s*)(?:add commands?:\s*[^;]+|update commands?:\s*[^;]+|[^:;]+:\s*update|build:\s*(?:align release workflow|publish release binary)|maintenance:\s*apply project updates)(?=\s*(?:;|$))'
     if ([string]::IsNullOrWhiteSpace($summary) -or $summary.Length -lt 20 -or $summary -match $genericPart) {
-        Write-Error 'The release message must describe the actual behavior changed; category-only summaries such as "panel: update" are rejected.'
-        exit 1
+        $script:buildHadIssues = $true; Write-Error 'The release message must describe the actual behavior changed; category-only summaries such as "panel: update" are rejected.'
+        $script:buildHadIssues = $true; exit 1
     }
 
     if ($summary -match '(?i)\b[^\s;]+\.py\b') {
-        Write-Error 'Release messages must describe plug-in behavior without naming source script files.'
-        exit 1
+        $script:buildHadIssues = $true; Write-Error 'Release messages must describe plug-in behavior without naming source script files.'
+        $script:buildHadIssues = $true; exit 1
     }
 
     if ($messageWasSupplied -or $messageWasPrompted) {
@@ -93,7 +190,7 @@ if ($Publish -or $ComposeOnly) {
         Write-Host "Saved semantic pending message: $summary" -ForegroundColor Green
     }
 
-    if ($ComposeOnly) { exit 0 }
+    if ($ComposeOnly) { $script:buildCompletedCleanly = $true; exit 0 }
 }
 
 $sourceFiles = Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File -Filter '*.cs' |
@@ -108,6 +205,7 @@ $expectedVersion = if ($latestSource) {
     [DateTime]::Now.ToString('yy.M.d.Hmm')
 }
 $releaseOutputsCurrent = $null -ne $latestSource
+Write-Host "${projectName} ${expectedVersion}: checking Release outputs..." -ForegroundColor Cyan
 
 foreach ($relativePath in $releaseDllPaths) {
     $dllPath = Join-Path $PSScriptRoot $relativePath
@@ -125,8 +223,9 @@ foreach ($relativePath in $releaseDllPaths) {
 }
 
 if ($releaseOutputsCurrent -and -not $Rebuild) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Register.ps1')
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Register.ps1') 2>&1 | ForEach-Object { if (Test-BuildOutputIssue $_) { $script:buildHadIssues = $true }; Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { if ($LASTEXITCODE -ne 0) { $script:buildHadIssues = $true }; $script:buildCompletedCleanly = ($LASTEXITCODE -eq 0); exit $LASTEXITCODE }
+    Update-InstalledToolbar
     if ($Publish) {
         Write-Host "$projectName Release DLLs already match source version $expectedVersion; skipping compilation." -ForegroundColor Green
         Write-Host 'Continuing publish commit flow with the existing Release outputs.' -ForegroundColor Green
@@ -139,14 +238,15 @@ if ($releaseOutputsCurrent -and -not $Rebuild) {
             "-p:BuildVersion=$expectedVersion",
             "-p:Version=$expectedVersion"
         )
-        & dotnet @publishArguments
-        exit $LASTEXITCODE
+        & dotnet @publishArguments 2>&1 | ForEach-Object { if (Test-BuildOutputIssue $_) { $script:buildHadIssues = $true }; Write-Host $_ }
+        if ($LASTEXITCODE -ne 0) { $script:buildHadIssues = $true }; $script:buildCompletedCleanly = ($LASTEXITCODE -eq 0); exit $LASTEXITCODE
     }
 
     Write-Host "$projectName Release DLLs already match source version $expectedVersion; skipping compilation." -ForegroundColor Green
-    exit 0
+    $script:buildCompletedCleanly = $true; exit 0
 }
 
+Write-Host 'Checking Release DLL availability...' -ForegroundColor Cyan
 $lockedReleaseDlls = @(
     foreach ($relativePath in $releaseDllPaths) {
         $dllPath = Join-Path $PSScriptRoot $relativePath
@@ -157,12 +257,13 @@ $lockedReleaseDlls = @(
 )
 
 if ($lockedReleaseDlls.Count -gt 0) {
+    $script:buildHadIssues = $true
     Write-Host 'WARNING: Release build skipped because the following DLL is locked:' -ForegroundColor Yellow
     $lockedReleaseDlls | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
     if ($Publish) {
         Write-Host 'The pending message remains for the next build.' -ForegroundColor Yellow
     }
-    exit 0
+    $script:buildCompletedCleanly = $true; exit 0
 }
 
 $buildArguments = @('build', $projectFile.FullName, '-c', 'Release', '--no-incremental')
@@ -170,9 +271,9 @@ if (-not $Publish) {
     $buildArguments += '-p:AutoCommitVersionOnRelease=false'
 }
 
-$buildOutput = @(& dotnet @buildArguments 2>&1)
+Write-Host "Compiling ${projectName} ${expectedVersion}; streaming compiler output..." -ForegroundColor Cyan
+& dotnet @buildArguments 2>&1 | ForEach-Object { if (Test-BuildOutputIssue $_) { $script:buildHadIssues = $true }; Write-Host $_ }
 $buildExitCode = $LASTEXITCODE
-$buildOutput | ForEach-Object { Write-Host $_ }
 
 if ($buildExitCode -ne 0) {
     $lockedAfterBuild = @(
@@ -185,12 +286,21 @@ if ($buildExitCode -ne 0) {
     )
 
     if ($lockedAfterBuild.Count -gt 0) {
-        Write-Host 'WARNING: Release build failed because the following DLL became locked:' -ForegroundColor Yellow
+        $script:buildHadIssues = $true
+    Write-Host 'WARNING: Release build failed because the following DLL became locked:' -ForegroundColor Yellow
         $lockedAfterBuild | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
         if ($Publish) {
             Write-Host 'The pending message remains for the next build.' -ForegroundColor Yellow
         }
-        exit 0
+        $script:buildCompletedCleanly = $true; exit 0
     }
-    exit $buildExitCode
+    if ($buildExitCode -ne 0) { $script:buildHadIssues = $true }; $script:buildCompletedCleanly = ($buildExitCode -eq 0); exit $buildExitCode
+}
+Update-InstalledToolbar
+Write-Host "${projectName} ${expectedVersion}: Release build completed." -ForegroundColor Green
+$script:buildCompletedCleanly = $true
+} finally {
+    if (Test-PauseBuildWindow -Explorer $pauseForExplorer -Completed $script:buildCompletedCleanly -HadIssues $script:buildHadIssues) {
+        try { [void](Read-Host 'Press Enter to close this build window') } catch { }
+    }
 }
