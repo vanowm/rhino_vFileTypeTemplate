@@ -122,18 +122,53 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
     _grid.Columns.Add(new GridTextBoxColumn
     {
-      HeaderText = "Extensions (e.g. .dxf, .dwg)",
+      HeaderText = "Extensions",
       Name = "Extension",
-      FillWeight = 28,
+      FillWeight = 22,
       MinimumWidth = 100,
     });
     _grid.Columns.Add(new GridTextBoxColumn
     {
-      HeaderText = "Template File (.3dm) — blank = Rhino default",
+      HeaderText = "Template File (.3dm)",
       Name = "TemplatePath",
-      FillWeight = 72,
-      MinimumWidth = 180,
+      FillWeight = 44,
+      MinimumWidth = 160,
     });
+    var viewportColumn = new DataGridViewComboBoxColumn
+    {
+      HeaderText = "Viewport",
+      Name = "Viewport",
+      FillWeight = 22,
+      MinimumWidth = 100,
+      DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
+      SortMode = DataGridViewColumnSortMode.NotSortable,
+    };
+    viewportColumn.Items.Add(ViewportSelection.DisplayDefault);
+    viewportColumn.Items.AddRange(ViewportSelection.StandardNames);
+    _grid.Columns.Add(viewportColumn);
+    _grid.Columns.Add(new DataGridViewCheckBoxColumn
+    {
+      HeaderText = "Maximize",
+      Name = "MaximizeViewport",
+      FillWeight = 12,
+      MinimumWidth = 70,
+      SortMode = DataGridViewColumnSortMode.NotSortable,
+    });
+
+    // Persist dropdown and checkbox edits immediately, including when Apply is
+    // clicked while the cell still owns focus.
+    _grid.CurrentCellDirtyStateChanged += (s, e) =>
+    {
+      if (_grid.IsCurrentCellDirty &&
+          (_grid.CurrentCell is DataGridViewComboBoxCell ||
+           _grid.CurrentCell is DataGridViewCheckBoxCell))
+        _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+    };
+    _grid.CellValueChanged += (s, e) =>
+    {
+      if (e.RowIndex >= 0 && e.ColumnIndex == viewportColumn.Index)
+        UpdateMaximizeCell(_grid.Rows[e.RowIndex]);
+    };
 
     // CellFormatting: highlight missing templates; show <Default>/<ext> placeholder; shorten paths.
     _grid.CellFormatting += (s, e) =>
@@ -199,8 +234,13 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     // Single click on a data cell → immediately enter edit mode.
     _grid.CellClick += (s, e) =>
     {
-      if (e.RowIndex >= 0 && e.ColumnIndex >= 0)
+      if (e.RowIndex >= 0 && e.ColumnIndex >= 0 &&
+          !_grid.Rows[e.RowIndex].Cells[e.ColumnIndex].ReadOnly)
+      {
         _grid.BeginEdit(true);
+        if (_grid.EditingControl is ComboBox combo)
+          combo.DroppedDown = true;
+      }
     };
 
     // When the editing control loses focus (e.g. clicking a button), commit the
@@ -258,7 +298,8 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     {
       Text = "Separate multiple extensions with commas (e.g. .dxf, .dwg). " +
              "The leading dot is optional.\n" +
-             "Leave template path empty to apply Rhino's current default template.",
+             "Leave template path empty to apply Rhino's current default template.\n" +
+             "Viewport (default) keeps the current view. Select a viewport to enable Maximize.",
       AutoSize = true,
       Dock = DockStyle.Fill,
       ForeColor = SystemColors.GrayText,
@@ -338,26 +379,94 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
 
   // ---- Load / Save ----
 
+  private string EnsureViewportChoice(string viewport)
+  {
+    var name = ViewportSelection.Normalize(viewport);
+    if (name.Length == 0) return ViewportSelection.DisplayDefault;
+    if (_grid.Columns["Viewport"] is not DataGridViewComboBoxColumn column) return name;
+    var existing = column.Items.Cast<string>().FirstOrDefault(item =>
+      string.Equals(item, name, StringComparison.OrdinalIgnoreCase));
+    if (existing != null) return existing;
+    column.Items.Add(name);
+    return name;
+  }
+
+  private void UpdateMaximizeCell(DataGridViewRow row)
+  {
+    var hasViewport = ViewportSelection.Normalize(row.Cells["Viewport"].Value?.ToString()).Length > 0;
+    var cell = row.Cells["MaximizeViewport"];
+    cell.ReadOnly = !hasViewport;
+    if (!hasViewport) cell.Value = false;
+    cell.Style.BackColor = hasViewport ? SystemColors.Window : SystemColors.Control;
+    cell.Style.ForeColor = hasViewport ? SystemColors.ControlText : SystemColors.GrayText;
+    cell.Style.SelectionBackColor = hasViewport ? SystemColors.Highlight : SystemColors.Control;
+    cell.Style.SelectionForeColor = hasViewport ? SystemColors.HighlightText : SystemColors.GrayText;
+  }
+
+  private sealed class MappingSettingsComparer : IEqualityComparer<FileTypeMapping>
+  {
+    internal static readonly MappingSettingsComparer Instance = new();
+
+    public bool Equals(FileTypeMapping? x, FileTypeMapping? y)
+    {
+      if (ReferenceEquals(x, y)) return true;
+      if (x == null || y == null) return false;
+      var viewport = ViewportSelection.Normalize(x.Viewport);
+      return StringComparer.OrdinalIgnoreCase.Equals(x.TemplatePath ?? string.Empty, y.TemplatePath ?? string.Empty) &&
+             StringComparer.OrdinalIgnoreCase.Equals(viewport, ViewportSelection.Normalize(y.Viewport)) &&
+             (viewport.Length == 0 || x.MaximizeViewport == y.MaximizeViewport);
+    }
+
+    public int GetHashCode(FileTypeMapping mapping)
+    {
+      var viewport = ViewportSelection.Normalize(mapping.Viewport);
+      return HashCode.Combine(
+        StringComparer.OrdinalIgnoreCase.GetHashCode(mapping.TemplatePath ?? string.Empty),
+        StringComparer.OrdinalIgnoreCase.GetHashCode(viewport),
+        viewport.Length > 0 && mapping.MaximizeViewport);
+    }
+  }
+
   public void ReloadConfig()
   {
     var config = VFileTypeTemplateConfig.Load();
     _enabledCheck.Checked = config.Enabled;
     _grid.Rows.Clear();
 
-    // Group mappings that share the same template onto a single row.
+    try
+    {
+      var doc = Rhino.RhinoDoc.ActiveDoc;
+      if (doc != null)
+        foreach (var view in doc.Views.GetStandardRhinoViews())
+          EnsureViewportChoice(view.MainViewport.Name);
+    }
+    catch (Exception ex)
+    {
+      Log.Write($"Could not list document viewports: {ex.Message}");
+    }
+
+    // Group only mappings that share both template and viewport preferences.
     var groups = config.Mappings
-      .GroupBy(m => m.TemplatePath ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+      .GroupBy(m => m, MappingSettingsComparer.Instance)
       .Select(g => new
       {
         Extensions = string.Join(", ",
           g.SelectMany(m => VFileTypeTemplateConfig.SplitExtensions(m.Extension))
            .Distinct(StringComparer.OrdinalIgnoreCase)
            .OrderBy(x => x)),
-        Template = g.Key,
+        Template = g.Key.TemplatePath,
+        Viewport = ViewportSelection.Normalize(g.Key.Viewport),
+        Maximize = g.Key.MaximizeViewport,
       });
 
     foreach (var group in groups)
-      _grid.Rows.Add(group.Extensions, group.Template);
+    {
+      var viewportChoice = EnsureViewportChoice(group.Viewport);
+      var index = _grid.Rows.Add(group.Extensions, group.Template,
+        viewportChoice,
+        group.Viewport.Length > 0 && group.Maximize);
+      UpdateMaximizeCell(_grid.Rows[index]);
+    }
   }
 
   public void SaveConfig()
@@ -365,9 +474,9 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
     // Commit any cell still being edited.
     _grid.EndEdit();
 
-    // Build ext → template map; if the same extension appears in multiple rows,
+    // Build ext → settings map; if the same extension appears in multiple rows,
     // the last row wins.
-    var extToTemplate = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    var extToMapping = new Dictionary<string, FileTypeMapping>(StringComparer.OrdinalIgnoreCase);
     foreach (DataGridViewRow row in _grid.Rows)
     {
       if (row.IsNewRow) continue;
@@ -377,21 +486,31 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       // Resolve bare filename to full path so File.Exists works at runtime.
       var path = ResolveFullTemplatePath(
         row.Cells["TemplatePath"].Value?.ToString()?.Trim() ?? string.Empty);
+      var viewport = ViewportSelection.Normalize(row.Cells["Viewport"].Value?.ToString());
+      var maximize = viewport.Length > 0 && row.Cells["MaximizeViewport"].Value is true;
 
       foreach (var ext in VFileTypeTemplateConfig.SplitExtensions(rawExt))
-        extToTemplate[ext] = path;
+        extToMapping[ext] = new FileTypeMapping
+        {
+          Extension = ext,
+          TemplatePath = path,
+          Viewport = viewport,
+          MaximizeViewport = maximize,
+        };
     }
 
-    // Re-group by template → one FileTypeMapping per template.
+    // Keep independent view choices even when multiple file types share a template.
     var config = new VFileTypeTemplateConfig { Enabled = _enabledCheck.Checked };
-    foreach (var group in extToTemplate
-               .GroupBy(kv => kv.Value, StringComparer.OrdinalIgnoreCase)
-               .OrderBy(g => g.Key))
+    foreach (var group in extToMapping.Values
+               .GroupBy(m => m, MappingSettingsComparer.Instance)
+               .OrderBy(g => g.Key.TemplatePath))
     {
       config.Mappings.Add(new FileTypeMapping
       {
-        Extension    = string.Join(", ", group.Select(kv => kv.Key).OrderBy(e => e)),
-        TemplatePath = group.Key,
+        Extension    = string.Join(", ", group.Select(m => m.Extension).OrderBy(e => e)),
+        TemplatePath = group.Key.TemplatePath,
+        Viewport = group.Key.Viewport,
+        MaximizeViewport = group.Key.MaximizeViewport,
       });
     }
 
@@ -443,7 +562,8 @@ internal sealed class VFileTypeTemplateOptionsControl : Panel
       BeginInvoke((Action)(() => _grid.BeginEdit(true)));
       return;
     }
-    var idx = _grid.Rows.Add(string.Empty, string.Empty);
+    var idx = _grid.Rows.Add(string.Empty, string.Empty, ViewportSelection.DisplayDefault, false);
+    UpdateMaximizeCell(_grid.Rows[idx]);
     _grid.CurrentCell = _grid.Rows[idx].Cells["Extension"];
     _grid.BeginEdit(true);
   }

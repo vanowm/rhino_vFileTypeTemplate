@@ -1,10 +1,11 @@
-# vFileTypeTemplate  ·  v26.8.25.1813
+# vFileTypeTemplate  ·  v26.11.20.1825
 
 vFileTypeTemplate is a Rhino 8 and Rhino 9 plug-in that applies a chosen Rhino template automatically after a mapped file type is opened.
 
 ## Features
 
 - Maps one or more file extensions to a Rhino template.
+- Selects a viewport per file-type mapping, with optional maximization.
 - Applies mappings after a normal document open while ignoring merge and reference operations.
 - Synchronizes document settings, notes, document strings, layers, linetypes, hatch patterns, dimension styles, materials, named views, named construction planes, and runtime settings.
 - Uses a DXF file's `$INSUNITS` value for document units when available.
@@ -37,13 +38,17 @@ _-vFileTypeTemplateApply "<template-name-or-path>"
   "mappings": [
     {
       "extension": ".dxf",
-      "templatePath": ""
+      "templatePath": "",
+      "viewport": "",
+      "maximizeViewport": false
     }
   ]
 }
 ```
 
 An empty template path uses Rhino's default template. A bare template filename is resolved in Rhino's template folder, while an absolute path can point elsewhere. Missing configured templates are skipped without changing the opened document. Multiple comma-separated extensions can share one mapping in the configuration UI.
+
+Each mapping also has a **Viewport** selector and **Maximize** checkbox. **(default)** leaves viewport selection and maximization unchanged. Select Perspective, Top, Bottom, Front, Back, Left, Right, or an existing model viewport to enable Maximize. The preference is applied after the template during automatic opens and manual application. If a standard viewport is absent, its projection is applied to the active model viewport (or the first model viewport when a layout is active). A missing custom viewport is skipped. Mappings sharing a template can retain different viewport choices; older configs default to no viewport override.
 
 During every build, missing default properties are merged into the existing config in each framework output. Existing values and configured entries are never replaced.
 

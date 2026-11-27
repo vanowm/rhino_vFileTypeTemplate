@@ -71,9 +71,7 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
     if (!config.Enabled)
       return;
 
-    var mapping = config.Mappings.FirstOrDefault(m =>
-      VFileTypeTemplateConfig.SplitExtensions(m.Extension)
-        .Any(e => string.Equals(e, ext, StringComparison.OrdinalIgnoreCase)));
+    var mapping = config.FindMapping(ext);
     if (mapping == null)
       return;
 
@@ -99,7 +97,7 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
     {
       RhinoApp.Idle -= OnIdleApplyTemplate;
       if (!capturedDoc.IsAvailable) return;
-      ApplyTemplate(capturedDoc, capturedTemplate, capturedSourcePath);
+      ApplyTemplate(capturedDoc, capturedTemplate, capturedSourcePath, mapping);
     }
   }
 
@@ -258,7 +256,7 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
   /// dxfPath is the path to the DXF file being opened; used to read DXF-encoded
   /// properties (e.g. $INSUNITS) that take priority over the template.
   /// </summary>
-  internal static void ApplyTemplate(RhinoDoc doc, string templatePath, string sourceFilePath = "")
+  internal static void ApplyTemplate(RhinoDoc doc, string templatePath, string sourceFilePath = "", FileTypeMapping? mapping = null)
   {
     // Read $INSUNITS from the DXF header — only applicable for .dxf files.
     bool isDxfFile = !string.IsNullOrEmpty(sourceFilePath) &&
@@ -268,7 +266,8 @@ public sealed class VFileTypeTemplatePlugIn : PlugIn
     Log.Write($"ApplyTemplate: source file units — $INSUNITS={dxfInsUnitsCode} → {dxfModelUnits}");
 
     // Snapshot doc properties before applying so the user can undo everything.
-    var beforeSnapshot = TakeDocSnapshot(doc);
+    var selectViewport = !string.IsNullOrEmpty(ViewportSelection.Normalize(mapping?.Viewport));
+    var beforeSnapshot = TakeDocSnapshot(doc, selectViewport);
 
     // Open an undo record — table additions (layers, linetypes, etc.) are captured automatically.
 uint undoSn = doc.BeginUndoRecord("Apply file type template");
@@ -307,10 +306,13 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       // Restore DXF unit system — DXF $INSUNITS takes priority over the template.
       RestoreDxfUnitSystem(doc, dxfModelUnits);
 
+      if (selectViewport)
+        ViewportSelection.Apply(doc, mapping!.Viewport, mapping.MaximizeViewport);
+
       // Register undo/redo callback for doc properties (not auto-captured by undo record).
       if (undoSn > 0)
       {
-        var afterSnapshot = TakeDocSnapshot(doc);
+        var afterSnapshot = TakeDocSnapshot(doc, selectViewport);
         doc.AddCustomUndoEvent("Apply file type template", OnDocSettingsUndoRedo,
                                new[] { beforeSnapshot, afterSnapshot });
       }
@@ -1201,6 +1203,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
     public bool GroundPlaneShadowOnly;
     // Grid per viewport
     public List<(Guid ViewportId, ConstructionPlane CPlane)> ViewportGrids = new();
+    public ViewportSelection.Snapshot? ViewSelection;
     // Notes, location
     public string Notes = string.Empty;
     public bool EarthLocationIsSet;
@@ -1210,7 +1213,7 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
     public Rhino.Geometry.Point3d ModelBasepoint;
   }
 
-  private static DocSettingsSnapshot TakeDocSnapshot(RhinoDoc doc)
+  private static DocSettingsSnapshot TakeDocSnapshot(RhinoDoc doc, bool captureViewSelection = false)
   {
     var snap = new DocSettingsSnapshot
     {
@@ -1272,6 +1275,9 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
         catch { }
     }
     catch { }
+
+    if (captureViewSelection)
+      snap.ViewSelection = ViewportSelection.Capture(doc);
 
     return snap;
   }
@@ -1347,6 +1353,8 @@ uint undoSn = doc.BeginUndoRecord("Apply file type template");
       }
     }
     catch { }
+    if (snap.ViewSelection != null)
+      ViewportSelection.Restore(doc, snap.ViewSelection);
     doc.Views.Redraw();
   }
 
@@ -1423,6 +1431,12 @@ public sealed class FileTypeMapping
   /// template as reported by <c>FileSettings.TemplateFile</c>.
   /// </summary>
   public string TemplatePath { get; set; } = string.Empty;
+
+  /// <summary>Model viewport name to activate. Empty preserves the default view behavior.</summary>
+  public string Viewport { get; set; } = string.Empty;
+
+  /// <summary>Maximize the selected viewport; ignored when Viewport is empty.</summary>
+  public bool MaximizeViewport { get; set; }
 }
 
 /// <summary>
@@ -1518,10 +1532,15 @@ public sealed class VFileTypeTemplateConfig
   /// </summary>
   public string? FindTemplatePath(string extension)
   {
-    var mapping = Mappings.FirstOrDefault(m =>
+    return FindMapping(extension)?.TemplatePath;
+  }
+
+  /// <summary>Finds the mapping and its view preferences for a file extension.</summary>
+  public FileTypeMapping? FindMapping(string extension)
+  {
+    return Mappings.FirstOrDefault(m =>
       SplitExtensions(m.Extension)
         .Any(e => string.Equals(e, extension, StringComparison.OrdinalIgnoreCase)));
-    return mapping?.TemplatePath;
   }
 
   /// <summary>

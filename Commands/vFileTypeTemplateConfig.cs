@@ -62,7 +62,10 @@ public sealed class vFileTypeTemplateConfig : Command
             {
               var m = config.Mappings[i];
               var tpl = string.IsNullOrWhiteSpace(m.TemplatePath) ? "<Rhino default>" : m.TemplatePath;
-              RhinoApp.WriteLine($"  [{i}] {m.Extension}  \u2192  {tpl}");
+              var viewport = ViewportSelection.Normalize(m.Viewport);
+              var viewLabel = viewport.Length == 0 ? ViewportSelection.DisplayDefault : viewport;
+              RhinoApp.WriteLine($"  [{i}] {m.Extension}  \u2192  {tpl}  Viewport={viewLabel}" +
+                (viewport.Length > 0 && m.MaximizeViewport ? " (maximized)" : string.Empty));
             }
           break;
 
@@ -169,12 +172,16 @@ public sealed class vFileTypeTemplateConfig : Command
   private static void ApplyForCurrentDoc(RhinoDoc doc, VFileTypeTemplateConfig config)
   {
     var ext = Path.GetExtension(doc.Path ?? string.Empty);
+    var mapping = config.FindMapping(ext);
     var templatePath = string.IsNullOrEmpty(ext)
       ? string.Empty
-      : VFileTypeTemplatePlugIn.ResolveTemplatePath(config.FindTemplatePath(ext) ?? string.Empty);
+      : VFileTypeTemplatePlugIn.ResolveTemplatePath(mapping?.TemplatePath ?? string.Empty);
 
     if (string.IsNullOrEmpty(templatePath) && config.Mappings.Count > 0)
-      templatePath = VFileTypeTemplatePlugIn.ResolveTemplatePath(config.Mappings[0].TemplatePath);
+    {
+      mapping = config.Mappings[0];
+      templatePath = VFileTypeTemplatePlugIn.ResolveTemplatePath(mapping.TemplatePath);
+    }
 
     if (string.IsNullOrEmpty(templatePath))
     {
@@ -182,7 +189,7 @@ public sealed class vFileTypeTemplateConfig : Command
       return;
     }
 
-    VFileTypeTemplatePlugIn.ApplyTemplate(doc, templatePath, doc.Path ?? string.Empty);
+    VFileTypeTemplatePlugIn.ApplyTemplate(doc, templatePath, doc.Path ?? string.Empty, mapping);
     RhinoApp.WriteLine($"vFileTypeTemplate: template applied from '{templatePath}'.");
   }
 
@@ -235,10 +242,8 @@ public sealed class vFileTypeTemplateApply : Command
   {
     var config = VFileTypeTemplateConfig.Load();
     var ext = Path.GetExtension(doc.Path ?? string.Empty);
-    string? configuredPath = string.IsNullOrEmpty(ext) ? null : config.FindTemplatePath(ext);
-
-    if (configuredPath == null && config.Mappings.Count > 0)
-      configuredPath = config.Mappings[0].TemplatePath;
+    var mapping = config.FindMapping(ext) ?? config.Mappings.FirstOrDefault();
+    var configuredPath = mapping?.TemplatePath;
 
     var defaultTemplatePath = VFileTypeTemplatePlugIn.ResolveTemplatePath(configuredPath ?? string.Empty);
     var requestedPath = PromptTemplateFile(defaultTemplatePath);
@@ -259,7 +264,7 @@ public sealed class vFileTypeTemplateApply : Command
     }
 
     Log.Write($"Manual apply requested with template '{templatePath}' for '{doc.Path}'.");
-    VFileTypeTemplatePlugIn.ApplyTemplate(doc, templatePath, doc.Path ?? string.Empty);
+    VFileTypeTemplatePlugIn.ApplyTemplate(doc, templatePath, doc.Path ?? string.Empty, mapping);
     RhinoApp.WriteLine($"vFileTypeTemplate: template applied from '{templatePath}'.");
     return Result.Success;
   }
